@@ -1,0 +1,41 @@
+#!/bin/sh
+# bootique-kms - initramfs-tools hook. Pull the Intel 'xe' GPU driver AND its
+# firmware into the initramfs and force it to load early, so the panel is at
+# native resolution before the boot splash draws its first frame. Without it the
+# splash comes up on the low-res EFI framebuffer (simpledrm) and xe's later
+# modeset to native strands the background in a corner (the post-unlock resize):
+# on this box xe otherwise loads ~35s in, from the root fs, long after the LUKS
+# prompt. Self-gated on the live GPU actually being bound to xe, so it is an
+# inert no-op on any non-xe box (e.g. an Nvidia workstation). Naming wall:
+# nothing here says tackup.
+set -e
+case "${1:-}" in
+  prereqs) echo ""; exit 0 ;;
+esac
+. /usr/share/initramfs-tools/hook-functions
+
+# Only when the running GPU is bound to xe (skip nvidia/i915/other boxes).
+_drv=
+for _d in /sys/class/drm/card*/device/driver; do
+  [ -e "$_d" ] || continue
+  _drv=$(basename "$(readlink -f "$_d")")
+  [ "$_drv" = xe ] && break
+done
+[ "$_drv" = xe ] || exit 0
+
+# Copy xe (with deps) and arrange for it to be modprobed early in the initramfs
+# init, so the native modeset happens up front rather than 35s into boot.
+force_load xe
+
+# xe requests these firmwares at bind time. modinfo declares only some of them
+# (the device-selected DMC and GuC are NOT listed), so copy the Lunar Lake set
+# explicitly. The compressed .zst is loaded by the kernel as-is.
+for _fw in \
+    i915/xe2lpd_dmc.bin \
+    xe/lnl_guc_70.bin \
+    xe/lnl_huc.bin \
+    xe/lnl_gsc_1.bin; do
+  for _c in "/lib/firmware/$_fw" "/lib/firmware/$_fw.zst"; do
+    [ -e "$_c" ] && copy_file firmware "$_c"
+  done
+done

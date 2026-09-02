@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=bootique
+Description=bootique boot splash (matches the grub theme and the greeter)
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/bootique
+ScriptFile=/usr/share/plymouth/themes/bootique/bootique.script

@@ -1,0 +1,11 @@
+#!/bin/sh
+# test/run - run every bootique in-repo test (*.t). Non-zero if any fails.
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+_fail=0
+for _t in "$HERE"/*.t; do
+  [ -e "$_t" ] || continue
+  sh "$_t" || _fail=1
+done
+[ "$_fail" = 0 ] && echo "all bootique tests passed" \
+  || { echo "bootique: TESTS FAILED" >&2; exit 1; }

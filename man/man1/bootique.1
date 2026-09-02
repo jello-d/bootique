@@ -1,0 +1,66 @@
+.TH BOOTIQUE 1 "" "bootique" "User Commands"
+.SH NAME
+bootique \- boot-cosmetics suite: a GRUB menu theme + a Plymouth boot splash
+.SH SYNOPSIS
+.B ./setup.sh
+.RB [ install | uninstall | check | test | version ]
+.SH DESCRIPTION
+bootique is a boot-cosmetics suite: a GRUB menu theme and a Plymouth boot splash
+that share one photo and one palette, so a machine looks like itself from
+power-on to login. It is a THEME PACK WITH A SYSTEM INSTALLER: unlike a
+.IR ~/.local
+gadget, its
+.B setup.sh
+installs to
+.I /boot/grub/themes/bootique
+and
+.I /usr/share/plymouth/themes/bootique
+with sudo and rebuilds the initramfs and
+.IR grub.cfg .
+.PP
+The install is idempotent: every piece is cmp/size/stamp-gated, so a settled box
+is a no-op and the initramfs and grub.cfg regenerate only when something
+changed. A box lacking GRUB or lacking Plymouth skips that half; a missing
+optional dependency (grub-mkfont, ImageMagick, a TTF) degrades with a note.
+.SH COMMANDS
+.TP
+.B install
+Place the GRUB theme (background, generated fonts, the selection bar + frame,
+theme.txt, the GRUB_THEME drop-in, quiet_boot) and the Plymouth theme (the theme
+files, the default.plymouth alternative, the quiet-splash drop-in, early-KMS),
+then regenerate the initramfs and grub.cfg as needed.
+.TP
+.B uninstall
+Remove the drop-ins and both theme dirs and regenerate, reverting to a plain
+boot.
+.TP
+.B check
+Audit every managed piece; emit [OK]/[FAIL]/[WARN] markers and a non-zero exit
+on drift.
+.TP
+.B test
+Run the in-repo stub suite (no root; nothing on the box is touched).
+.SH EARLY-KMS
+Forces the GPU driver + firmware into the initramfs so the panel is at native
+resolution before Plymouth's first frame (the post-unlock resize fix). A dracut
+.I force_drivers
+drop-in on a dracut box with an
+.B xe
+GPU, the initramfs-tools hook otherwise, nothing on a non-xe box. It composes
+with other initramfs drop-ins (e.g. a remote-unlock dropbear) via
+.BR update-initramfs .
+.SH FILES
+.TP
+.I /boot/grub/themes/bootique/
+The installed GRUB theme (background, *.pf2 fonts, sel_*/frame_* slices,
+theme.txt).
+.TP
+.I /usr/share/plymouth/themes/bootique/
+The installed Plymouth theme (bootique.plymouth, bootique.script, the PNGs).
+.TP
+.I /etc/default/grub.d/{bootique,splash}.cfg
+The GRUB_THEME and quiet-splash drop-ins.
+.SH SEE ALSO
+.BR plymouth (8),
+.BR grub-mkconfig (8),
+.BR update-initramfs (8)

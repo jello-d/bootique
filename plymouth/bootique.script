@@ -1,0 +1,314 @@
+# bootique.script: the bootique boot splash (plymouth `script` plugin). ONE
+# theme for boot AND shutdown/reboot (branched on Plymouth.GetMode()): boot is
+# the misty-forest photo with a green "Unlock disk" pill prompt and a left-
+# aligned lavender boot-log scroll; shutdown/reboot is the warp field with a
+# CENTRED bright-green scroll under a mode label. NO brand on screen.
+#
+# RESIZE-SAFE: all geometry is recomputed from the LIVE window in relayout(),
+# which the refresh callback re-runs whenever the panel size changes. So if the
+# GPU driver modesets low-res -> native mid-boot (e.g. xe loading late), the
+# whole layout follows instead of stranding in a corner. On a box where the
+# native mode is up before the first frame (the xe-in-initramfs path) the size
+# never changes, so relayout() runs exactly once and this is inert. Two rules
+# the plymouth `script` language forces:
+#   - functions bind referenced names at DEFINITION time, so every helper is
+#     defined BEFORE the function that calls it (relayout last of the layout
+#     helpers; feed after tail_redraw).
+#   - a function that ASSIGNS a name creates a LOCAL unless that name already
+#     exists as a global, so every geometry global is declared at top level
+#     first and relayout()/compute_geometry() only REASSIGN them.
+
+# palette (bootique), as 0..1 floats:
+#   purple #3F2470 -> 0.247 0.141 0.439    (menu text)
+#   green  #298033 -> 0.16 0.5 0.21        (Unlock prompt + hint)
+#   lavender #C3AEF5 -> 0.765 0.682 0.961  (boot scroll)
+#   bright green -> 0.20 0.92 0.38         (shutdown scroll + label)
+fun t(str, r, g, b, px) { return Image.Text(str, r, g, b, 1, "Sans " + px); }
+fun tb(str, r, g, b, px) {
+  return Image.Text(str, r, g, b, 1, "Sans Bold " + px);
+}
+
+# is_off: plymouth runs this same theme for shutdown/reboot; is_off switches to
+# the warp look (a centred green scroll). boot/suspend/etc keep the forest look.
+mode = Plymouth.GetMode();
+is_off = 0;
+if (mode == "shutdown") { is_off = 1; }
+if (mode == "reboot")   { is_off = 1; }
+
+# background file: the forest photo on boot, the warp field on shutdown/reboot.
+bg_file = "background.png";
+if (is_off == 1) { bg_file = "shutdown-bg.png"; }
+
+# scroll colour + alignment are mode constants (do not change on resize).
+tail_n = 9;              # rolling-tail line count
+tail_min = 0.7375;       # opacity of the OLDEST line (fade-depth knob)
+tail_center = 0;
+tail_cr = 0.765; tail_cg = 0.682; tail_cb = 0.961;   # lavender (boot)
+if (is_off == 1) {
+  tail_center = 1;
+  tail_cr = 0.20; tail_cg = 0.92; tail_cb = 0.38;    # bright green (shutdown)
+}
+dot_max = 64;            # passphrase-dot sprite pool size
+
+# STATE + geometry globals, declared here so the layout functions REASSIGN them
+# (see the scoping rule above) rather than shadowing with locals. Values are
+# filled by compute_geometry()/relayout(); the zeros are just placeholders.
+prompt_shown = 0; cur_bullets = 0;
+# auto-unlock UX: a password request is answered NON-interactively by clevis
+# (Tang, on the home network), but plymouth is asked to display it in PARALLEL
+# with clevis trying, so there is no clean "the human is needed" signal. We show
+# a quiet "Unlocking..." state and escalate to the real pill only after
+# grace_ticks frames with no typing (or the instant the user types). The window
+# is deliberately LONG, longer than ANY successful auto-unlock (incl a slow USB
+# NIC), so a slow-but-successful unlock NEVER flashes the pill; the pill appears
+# (BEFORE the user types) only once the wait is long enough that clevis has
+# genuinely failed and a passphrase is really needed.
+pw_start = 0;        # frame the password prompt began (0 = inactive)
+pw_escalated = 0;    # 1 once the real pill shows (grace elapsed or user typed)
+grace_ticks = 1500;  # LONG: must exceed any successful unlock (see above)
+tick = 0;            # per-frame counter (on_refresh)
+W = 0; H = 0;
+sz_title = 0; sz_status = 0; dot_sz = 0; dot_pitch = 0; sz_hint = 0;
+sz_tail = 0; sz_esc = 0; pill_w = 0; pill_h = 0; pill_y = 0; edge_x = 0;
+tail_gap = 0; tail_bottom = 0; tail_x = 0; dot_img = NULL;
+
+# --- sprites: created ONCE up front so the layout helpers (defined next) can
+# reference them; positioned/scaled by relayout(). ---------------------------
+bg = Sprite();
+bg.SetZ(-100);
+for (i = 0; i < tail_n; i++) {
+  tail_text[i] = "";
+  tail_sprite[i] = Sprite();
+  tail_sprite[i].SetZ(5);
+}
+status = Sprite();
+pill = Sprite();
+pill.SetZ(10);
+pill.SetOpacity(0);
+title = Sprite();
+hint = Sprite();
+for (i = 0; i < dot_max; i++) {
+  dot_pool[i] = Sprite();
+  dot_pool[i].SetZ(11);
+  dot_pool[i].SetOpacity(0);
+}
+# esc (boot) and scrim/offlabel (shutdown) are created UNCONDITIONALLY so their
+# names always exist when place_esc/place_shutdown are defined (the language
+# resolves referenced names at definition time). Each is imaged only in its own
+# mode; in the other mode it stays an empty, invisible sprite.
+esc = Sprite(); esc.SetZ(5);
+scrim = Sprite(); scrim.SetZ(3);
+offlabel = Sprite();
+
+# centre SPRITE's IMG horizontally at Y.
+fun centre(sprite, img, y) {
+  sprite.SetImage(img);
+  sprite.SetX((W - img.GetWidth()) / 2);
+  sprite.SetY(y);
+}
+
+# compute_geometry: (re)derive every size/position from the LIVE window. Sizes
+# are FRACTIONS of the panel, never absolute pixels, so the layout is
+# resolution-independent and the half-res VM preview is faithful.
+fun compute_geometry() {
+  W = Window.GetWidth();
+  H = Window.GetHeight();
+  sz_title  = H * 0.020;   # "Unlock" title / shutdown mode label (bold)
+  sz_status = H * 0.012;   # top phase line (boot only, small)
+  dot_sz    = H * 0.011;   # passphrase dot diameter (dot.png)
+  dot_pitch = H * 0.016;   # dot centre-to-centre spacing (smaller = closer)
+  sz_hint   = H * 0.010;   # hint under the pill
+  sz_tail   = H * 0.013;   # scroll lines
+  sz_esc    = H * 0.013;   # Esc affordance (= sz_tail so it baseline-aligns)
+  pill_w    = W * 0.36;
+  pill_h    = H * 0.050;
+  pill_y    = H * 0.44;
+  edge_x    = W * 0.03;    # left/right margin for the corner text
+  tail_gap  = H * 0.024;   # vertical spacing between scroll lines
+  dot_img   = Image("dot.png").Scale(dot_sz, dot_sz);
+  # scroll block: boot = left, low in the dark foliage band; shutdown = centred
+  # vertically in the warp.
+  if (is_off == 1) {
+    tail_bottom = H / 2 + (tail_n - 1) * tail_gap / 2;
+    tail_x = 0;
+  } else {
+    tail_bottom = H * 0.955;
+    tail_x = edge_x;
+  }
+}
+
+fun tail_img(str, a) {
+  return Image.Text(str, tail_cr, tail_cg, tail_cb, a, "Sans " + sz_tail);
+}
+# tail_redraw: repaint the rolling tail at the current geometry. linear fade
+# ramp: newest = 1.0, oldest = tail_min.
+fun tail_redraw() {
+  step = (1.0 - tail_min) / (tail_n - 1);
+  for (i = 0; i < tail_n; i++) {
+    if (tail_text[i] == "") {
+      tail_sprite[i].SetImage(NULL);
+    } else {
+      age = tail_n - 1 - i;          # 0 = newest (bottom)
+      a = 1.0 - age * step;
+      _im = tail_img(tail_text[i], a);
+      tail_sprite[i].SetImage(_im);
+      if (tail_center == 1) {
+        tail_sprite[i].SetX((W - _im.GetWidth()) / 2);
+      } else {
+        tail_sprite[i].SetX(tail_x);
+      }
+      tail_sprite[i].SetY(tail_bottom - age * tail_gap);
+    }
+  }
+}
+
+# draw_prompt: the LUKS unlock prompt at current geometry -- a light-green pill
+# with dark-green passphrase dots, a green title above, a green hint below.
+# Called from on_password AND from relayout (so a resize repositions a prompt
+# that is already showing). dots re-take dot_img so a resize rescales them.
+fun draw_prompt(bullets) {
+  centre(title, tb("Unlock disk to continue", 0.16, 0.5, 0.21, sz_title),
+         H * 0.39);
+  pill.SetImage(Image("pill.png").Scale(pill_w, pill_h));
+  pill.SetX((W - pill_w) / 2);
+  pill.SetY(pill_y);
+  pill.SetOpacity(1);
+  _x0 = (W - ((bullets - 1) * dot_pitch + dot_sz)) / 2;
+  _dy = pill_y + pill_h / 2 - dot_sz / 2;
+  for (i = 0; i < dot_max; i++) {
+    if (i < bullets) {
+      dot_pool[i].SetImage(dot_img);
+      dot_pool[i].SetX(_x0 + i * dot_pitch);
+      dot_pool[i].SetY(_dy);
+      dot_pool[i].SetOpacity(1);
+    } else {
+      dot_pool[i].SetOpacity(0);
+    }
+  }
+  centre(hint, t("type your passphrase to unlock the disk",
+                 0.16, 0.5, 0.21, sz_hint), pill_y + pill_h + H * 0.015);
+}
+fun hide_prompt() {
+  title.SetImage(NULL);
+  hint.SetImage(NULL);
+  pill.SetOpacity(0);
+  for (i = 0; i < dot_max; i++) { dot_pool[i].SetOpacity(0); }
+}
+
+# draw_unlocking: the QUIET auto-unlock state -- no pill, a soft "Unlocking..."
+# title + hint, shown while clevis may still answer the request (the grace
+# window). draw_prompt replaces it once a passphrase is genuinely needed.
+fun draw_unlocking() {
+  centre(title, tb("Unlocking disk...", 0.16, 0.5, 0.21, sz_title), H * 0.39);
+  pill.SetOpacity(0);
+  for (i = 0; i < dot_max; i++) { dot_pool[i].SetOpacity(0); }
+  centre(hint, t("auto-unlocking on the home network...",
+                 0.16, 0.5, 0.21, sz_hint), pill_y + pill_h + H * 0.015);
+}
+
+# Esc-for-full-log affordance (boot only), pinned right of the dark band.
+fun place_esc() {
+  if (is_off == 0) {
+    eimg = t("Esc: full log", 0.22, 0.68, 0.34, sz_esc);
+    esc.SetImage(eimg);
+    esc.SetX(W - eimg.GetWidth() - edge_x);
+    esc.SetY(tail_bottom + sz_tail - sz_esc);
+  }
+}
+
+# shutdown extras (shutdown/reboot only): a soft dark scrim behind the centred
+# scroll (contrast on the busy warp) and a bold green mode label above it.
+fun place_shutdown() {
+  if (is_off == 1) {
+    scrim.SetImage(Image("scrim.png").Scale(W * 0.72, H * 0.5));
+    scrim.SetX((W - W * 0.72) / 2);
+    scrim.SetY(H / 2 - H * 0.25);
+    _lbl = "Shutting down";
+    if (mode == "reboot") { _lbl = "Rebooting"; }
+    _ly = tail_bottom - (tail_n - 1) * tail_gap - H * 0.06;
+    centre(offlabel, tb(_lbl, tail_cr, tail_cg, tail_cb, sz_title), _ly);
+  }
+}
+
+# relayout: the single layout pass. Recompute geometry, rescale the bg, and
+# reposition every element from current state. Runs once at startup and again
+# on each panel-size change (see on_refresh). Defined AFTER the helpers it uses.
+fun relayout() {
+  compute_geometry();
+  bg.SetImage(Image(bg_file).Scale(W, H));
+  tail_redraw();
+  if (prompt_shown == 1) {
+    if (pw_escalated == 1) { draw_prompt(cur_bullets); }
+    else { draw_unlocking(); }
+  }
+  place_esc();
+  place_shutdown();
+}
+
+# feed(): push one line into the rolling tail (deduping consecutive repeats).
+fun feed(text) {
+  if (text != tail_text[tail_n - 1]) {
+    for (i = 0; i < tail_n - 1; i++) { tail_text[i] = tail_text[i + 1]; }
+    tail_text[tail_n - 1] = text;
+    tail_redraw();
+  }
+}
+
+# initial layout (fills geometry + paints the bg/scroll/shutdown chrome).
+relayout();
+
+# --- plymouth callbacks ------------------------------------------------------
+# top line: the current boot phase (boot only; the shutdown label replaces it).
+# Each status update also feeds the scroll.
+fun on_status(msg) {
+  if (is_off == 0) {
+    centre(status, t(msg, 0.247, 0.141, 0.439, sz_status), H * 0.07);
+  }
+  feed(msg);
+}
+Plymouth.SetUpdateStatusFunction(on_status);
+
+# the LUKS unlock prompt: remember it is showing (so a resize can redraw it),
+# then draw. on_password never fires on shutdown, so the prompt stays hidden.
+fun on_password(prompt, bullets) {
+  prompt_shown = 1;
+  cur_bullets = bullets;
+  if (pw_start == 0) { pw_start = tick; }   # first request: start grace clock
+  if (bullets > 0) { pw_escalated = 1; }    # any typing -> the real pill now
+  if (pw_escalated == 1) { draw_prompt(bullets); }
+  else { draw_unlocking(); }
+}
+fun on_normal() {
+  prompt_shown = 0;
+  pw_start = 0;
+  pw_escalated = 0;
+  hide_prompt();
+}
+Plymouth.SetDisplayPasswordFunction(on_password);
+Plymouth.SetDisplayNormalFunction(on_normal);
+
+# specific notices (cryptsetup, fsck, failures) also feed the scroll.
+fun on_message(text) { feed(text); }
+Plymouth.SetMessageFunction(on_message);
+
+# on_refresh: the per-frame tick. Detect a panel-size change (the low-res ->
+# native modeset) and re-lay-out the whole splash so nothing is stranded.
+fun on_refresh() {
+  tick++;
+  _changed = 0;
+  if (Window.GetWidth() != W) { _changed = 1; }
+  if (Window.GetHeight() != H) { _changed = 1; }
+  if (_changed == 1) { relayout(); }
+  # grace elapsed with no typing -> escalate the quiet state to the real pill
+  # (Tang is unreachable; a passphrase is genuinely needed).
+  if (prompt_shown == 1 && pw_escalated == 0 && pw_start > 0
+      && tick - pw_start >= grace_ticks) {
+    pw_escalated = 1;
+    draw_prompt(cur_bullets);
+  }
+}
+Plymouth.SetRefreshFunction(on_refresh);
+
+# greetd (boot) / poweroff takes the display from here.
+fun on_quit() { }
+Plymouth.SetQuitFunction(on_quit);

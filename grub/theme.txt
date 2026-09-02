@@ -1,0 +1,63 @@
+# bootique -- the grub boot-menu theme. A GRUB theme (not the 16-colour
+# menu_color knob) so colours are exact hex. Generated -- do not hand-edit this
+# deployed copy. Layout + palette:
+#   - a FRAME near the screen edges (menu_pixmap_style = frame_*.png). Menu
+#     items at the top, labels near the bottom.
+#   - menu items deep purple #3F2470 (matches the desktop titlebar). The
+#     SELECTED item is bold purple on a light-green bar (sel_*.png).
+#   - labels sit over the dark foliage, so they are light: the timeout is bold
+#     vibrant green, the help line lavender.
+#   - item_spacing 0 so rows are adjacent (uniform, and the snapshot columns --
+#     box-drawing │ -- form a CONTIGUOUS vertical rule).
+#   - fonts are 24px, sized for the panel's native-res boot. Percent geometry is
+#     resolution-independent; the loader picks up every .pf2 in this dir.
+desktop-image: "background.png"
+title-text: ""
+terminal-font: "DejaVu Sans Mono Regular 24"
+# The console window for the boot messages ("Loading Linux .../initrd ..."):
+# with a theme, gfxmenu defaults it to a jarring CENTRED half-screen black box.
+# Full-screen makes selecting an entry read as a normal boot instead. NOTE:
+# global properties need their % values QUOTED (unlike component props) or grub
+# rejects the WHOLE theme ("enclose literal values in quotes") and falls back to
+# the plain text menu.
+terminal-left: "0%"
+terminal-top: "0%"
+terminal-width: "100%"
+terminal-height: "100%"
+
++ boot_menu {
+  left = 3%
+  top = 4%
+  width = 94%
+  height = 90%
+  menu_pixmap_style = "frame_*.png"
+  item_font = "DejaVu Sans Mono Regular 24"
+  item_color = "#3F2470"
+  selected_item_font = "DejaVu Sans Mono Bold 24"
+  selected_item_color = "#3F2470"
+  selected_item_pixmap_style = "sel_*.png"
+  item_height = 30
+  item_padding = 8
+  item_spacing = 0
+}
+
++ label {
+  id = "__timeout__"
+  left = 3%
+  top = 84%
+  width = 94%
+  align = "center"
+  color = "#2BE04C"
+  font = "DejaVu Sans Mono Bold 24"
+  text = "Booting automatically in %d s"
+}
+
++ label {
+  left = 3%
+  top = 89%
+  width = 94%
+  align = "center"
+  color = "#C3AEF5"
+  font = "DejaVu Sans Mono Regular 24"
+  text = "Arrow keys to select - Enter to boot - E to edit"
+}
