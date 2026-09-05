@@ -3,3 +3,5 @@ CLAUDE.md
 # Editor / build detritus.
 *.swp
 *~
+__pycache__/
+*.pyc

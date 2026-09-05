@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""vmexpect -- tiny expect-over-serial-socket driver for headless VM tests.
+
+Connects to a QEMU chardev UNIX socket (the guest's serial line), then walks an
+interaction script -- matching guest output and INJECTING input -- so an
+interactive boot (a LUKS passphrase prompt, an installer question) can be driven
+and its success asserted with no graphical console. Pure stdlib, no deps.
+
+  vmexpect --socket PATH --script FILE [--log FILE] [--timeout SECS]
+
+Script directives (one per line; blank lines and # comments ignored):
+  timeout <secs>    per-expect timeout for the expects that follow
+  expect  <regex>   read guest output until it matches (Python regex)
+  send    <text>    write text + newline to the guest
+  sendraw <text>    write text with NO trailing newline
+
+Exit 0 when the whole script completes (the last expect matched), 1 on a
+timeout, 2 on usage/connection error. Everything the guest emits is streamed to
+stdout (and --log), so a failing run shows exactly where it stalled.
+"""
+import argparse, re, select, socket, sys, time
+
+
+def connect(path, deadline):
+    while time.time() < deadline:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            s.connect(path)
+            return s
+        except OSError:
+            s.close()
+            time.sleep(0.2)
+    return None
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--socket", required=True)
+    ap.add_argument("--script", required=True)
+    ap.add_argument("--log")
+    ap.add_argument("--timeout", type=float, default=180.0)
+    a = ap.parse_args()
+
+    directives = []
+    with open(a.script) as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            kind, _, arg = line.partition(" ")
+            directives.append((kind, arg))
+
+    log = open(a.log, "w") if a.log else None
+
+    def emit(text):
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        if log:
+            log.write(text)
+            log.flush()
+
+    s = connect(a.socket, time.time() + 15)
+    if not s:
+        print(f"vmexpect: cannot connect {a.socket}", file=sys.stderr)
+        return 2
+
+    buf = ""
+    per = a.timeout
+    for kind, arg in directives:
+        if kind == "timeout":
+            per = float(arg)
+        elif kind in ("send", "sendraw"):
+            s.sendall((arg + ("\n" if kind == "send" else "")).encode())
+            emit("\n[vmexpect: sent input]\n")
+        elif kind == "expect":
+            rx = re.compile(arg)
+            end = time.time() + per
+            while not rx.search(buf):
+                if time.time() > end:
+                    print(f"\nvmexpect: TIMEOUT waiting for /{arg}/",
+                          file=sys.stderr)
+                    return 1
+                r, _, _ = select.select([s], [], [], 0.5)
+                if r:
+                    chunk = s.recv(4096)
+                    if chunk:
+                        text = chunk.decode("utf-8", "replace")
+                        emit(text)
+                        buf = (buf + text)[-65536:]
+            emit(f"\n[vmexpect: matched /{arg}/]\n")
+            buf = ""
+        else:
+            print(f"vmexpect: unknown directive {kind!r}", file=sys.stderr)
+            return 2
+
+    print("\nvmexpect: script complete (success)", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
