@@ -515,10 +515,84 @@ EOF
 }
 
 # =========================== shared regen + dispatch ========================
+# The initramfs composition guard. bootique's regen rebuilds the WHOLE
+# initramfs, which on a real box also carries OTHER owners' payloads (an early
+# ssh server for remote unlock, a network-unlock client, forced NIC drivers).
+# Those compose through their own drop-ins, so a correct rebuild keeps them, but
+# a rebuild is exactly where a config problem elsewhere turns into a box that
+# boots without the thing that unlocks it, and nothing would notice until the
+# reboot. So: list the image before and after, and report anything that
+# DISAPPEARED. Deliberately mechanism-AGNOSTIC, it never learns what clevis or
+# dropbear are: that keeps bootique unfused from the unlock mechanism while
+# still refusing to drop it on the floor quietly.
+BS_INITRD_DIR=${BS_INITRD_DIR:-/boot}
+LSINITRAMFS=${LSINITRAMFS:-lsinitramfs}
+LSINITRD=${LSINITRD:-lsinitrd}
+COMPOSITION_LOST=
+
+# _initrd_img: the image `update-initramfs -u` rewrites, i.e. the DEFAULT-boot
+# kernel's = the NEWEST installed, not `uname -r` (targeting the running kernel
+# is the classic mismatch trap).
+_initrd_img() {
+  _k=$(ls "$BS_INITRD_DIR"/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' \
+       | sort -V | tail -1)
+  [ -n "$_k" ] || return 1
+  [ -f "$BS_INITRD_DIR/initrd.img-$_k" ] || return 1
+  printf '%s' "$BS_INITRD_DIR/initrd.img-$_k"
+}
+
+# _initrd_list <img>: sorted paths inside the image; empty if it cannot be read.
+# lsinitramfs is PREFERRED because it prints bare paths. dracut's lsinitrd
+# offers only an ls -l style table, so that branch has to parse it (taking the
+# last field, and the link name rather than the target on a symlink line).
+_initrd_list() {
+  if command -v "$LSINITRAMFS" >/dev/null 2>&1; then
+    sudo "$LSINITRAMFS" "$1" 2>/dev/null | sort -u
+  elif command -v "$LSINITRD" >/dev/null 2>&1; then
+    sudo "$LSINITRD" "$1" 2>/dev/null | awk '
+      /^[-dlbcps][rwxsStT-][rwxsStT-]/ {
+        if ($(NF - 1) == "->") print $(NF - 2); else print $NF }' | sort -u
+  fi
+}
+
+# _report_dropped <before-file> <after-file>: loud on anything that vanished.
+_report_dropped() {
+  _gone=$(comm -23 "$1" "$2")
+  if [ -z "$_gone" ]; then
+    echo "$PKG: initramfs composition intact ($(wc -l < "$2") paths)"
+    return 0
+  fi
+  _n=$(printf '%s\n' "$_gone" | wc -l)
+  echo "$PKG: !! the rebuilt initramfs DROPPED $_n path(s) the previous one" \
+       "carried:" >&2
+  printf '%s\n' "$_gone" | head -20 | sed 's/^/  - /' >&2
+  [ "$_n" -gt 20 ] && echo "  ... and $((_n - 20)) more" >&2
+  echo "$PKG: another owner's payload may now be missing (remote unlock, a" \
+       "network unlock client, a forced NIC). CHECK BEFORE YOU REBOOT." >&2
+  COMPOSITION_LOST=1
+}
+
 regen() {
   if [ -n "$NEED_INITRAMFS" ]; then
     echo "$PKG: rebuilding initramfs (theme or early-KMS changed)"
+    _img=$(_initrd_img) || _img=
+    _before=
+    if [ -n "$_img" ]; then
+      _before=$(mktemp)
+      _initrd_list "$_img" > "$_before"
+      # An unreadable image is not a pass: say the guard did not run.
+      if [ ! -s "$_before" ]; then
+        rm -f "$_before"; _before=
+        echo "$PKG: cannot list $_img; composition NOT checked this run" >&2
+      fi
+    fi
     sudo "$UPDATE_INITRAMFS" -u
+    if [ -n "$_before" ]; then
+      _after=$(mktemp)
+      _initrd_list "$_img" > "$_after"
+      _report_dropped "$_before" "$_after"
+      rm -f "$_before" "$_after"
+    fi
   fi
   if [ -n "$NEED_GRUB" ]; then
     echo "$PKG: regenerating grub.cfg (menu or cmdline changed)"
@@ -538,6 +612,12 @@ do_install() {
   [ -n "$_did" ] || { echo "$PKG: neither grub nor plymouth here; nothing"
                       return 0; }
   regen
+  # A rebuild that lost another owner's payload exits NON-ZERO: the cosmetics
+  # installed fine, but the box's boot may no longer be able to unlock itself,
+  # and that must not read as success to a human or to a provisioning layer.
+  # Self-clearing: the next run's "before" no longer has those paths either, so
+  # an intended removal warns exactly once.
+  [ -z "$COMPOSITION_LOST" ] || return 1
 }
 
 do_uninstall() {

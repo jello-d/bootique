@@ -77,7 +77,43 @@ case "\$1" in
 esac
 exit 0
 EOF
-printf '#!/bin/sh\n: > "%s"\n' "$IMARK" > "$T/sbin/update-initramfs"
+# The initramfs composition guard needs a listable image. MANIFEST stands in for
+# the image contents: lsinitramfs prints it, and update-initramfs "rebuilds" by
+# replacing it with REBUILT_MANIFEST when that exists, which is how a rebuild
+# that DROPS another owner's payload is simulated.
+mkdir -p "$T/boot"
+: > "$T/boot/vmlinuz-6.8.0-31-generic"
+: > "$T/boot/initrd.img-6.8.0-31-generic"
+MANIFEST=$T/manifest; REBUILT=$T/manifest.next
+# bin/link is rendered as a SYMLINK by the lsinitrd stub, so that dropping it
+# proves the ls -l parser reports the link name and not its target.
+full_manifest() {
+  printf 'usr/sbin/sshd\nusr/bin/clevis\nlib/modules/e1000e.ko\nbin/sh\n'
+  printf 'bin/link\n'
+}
+full_manifest > "$MANIFEST"
+printf '#!/bin/sh\ncat "%s"\n' "$MANIFEST" > "$T/sbin/lsinitramfs"
+# dracut's lsinitrd has no bare-path mode, so the guard parses an ls -l style
+# table. This stub reproduces that shape (header block, a symlink line whose
+# "-> target" must NOT be mistaken for the path) to exercise that parser.
+cat > "$T/sbin/lsinitrd" <<EOF
+#!/bin/sh
+echo "Image: \$1: 53M"
+echo "========================================================================"
+echo "Version:"
+echo "========================================================================"
+awk '\$0 == "bin/link" {
+       printf "lrwxrwxrwx 1 root root 4 Jan  1 00:00 %s -> dash\n", \$0; next }
+     { printf "-rw-r--r-- 1 root root 1234 Jan  1 00:00 %s\n", \$0 }' \
+  "$MANIFEST"
+echo "drwxr-xr-x   2 root     root          0 Jan  1 00:00 usr/bin"
+EOF
+cat > "$T/sbin/update-initramfs" <<EOF
+#!/bin/sh
+: > "$IMARK"
+[ -f "$REBUILT" ] && cp "$REBUILT" "$MANIFEST"
+exit 0
+EOF
 cat > "$T/sbin/grub-mkconfig" <<EOF
 #!/bin/sh
 out=
@@ -94,11 +130,15 @@ chmod +x "$T/sbin"/*
 # and for a *clevis* dir under BS_DRACUT_MODDIR (an empty scratch dir here).
 USES_DRACUT=1; GPU=xe
 UMODE=auto; CLEVIS_BIN=absent-clevis; MODEFILE=$T/etc/bootique/unlock-mode
+# Which initramfs lister the guard may find. Both are pinned so the host's real
+# tools can never leak in and decide which branch the suite exercises.
+LSFS=lsinitramfs; LSRD=absent-lsinitrd
 DMODS=$T/dracut-mods; mkdir -p "$DMODS"
 run() {
   env -i PATH="$T/sbin:/usr/bin:/bin" NO_COLOR=1 ALT_STATE="$ALT_STATE" \
     BS_UNLOCK_MODE="$UMODE" BS_CLEVIS_BIN="$CLEVIS_BIN" \
     BS_MODE_FILE="$MODEFILE" BS_DRACUT_MODDIR="$DMODS" \
+    BS_INITRD_DIR="$T/boot" LSINITRAMFS="$LSFS" LSINITRD="$LSRD" \
     GRUB_ASSETDIR="$GAD" GRUB_BG_DST="$GAD/background.png" \
     GRUB_THEME_DST="$GAD/theme.txt" GRUB_DROPIN_DST="$GDROP" \
     GRUB_SELECT_STAMP="$GAD/.sel.bg" GRUB_FRAME_STAMP="$GAD/.frame.spec" \
@@ -211,6 +251,58 @@ run install >/dev/null 2>&1 && fail "install ignored an unreadable mode file"
 chmod 644 "$MODEFILE"
 rm -f "$MODEFILE"
 run install >/dev/null 2>&1 || fail "install (mode file removed) non-zero"
+
+# --- initramfs composition guard ---------------------------------------------
+# A rebuild that keeps everything is quiet; one that DROPS another owner's
+# payload is loud AND non-zero, because the cosmetics succeeding while the box
+# lost the thing that unlocks it must not read as success.
+rm -f "$BTD/bootique.script"                 # force a rebuild
+out=$(run install 2>&1) || fail "install failed on an intact rebuild"
+printf '%s' "$out" | grep -q 'initramfs composition intact' \
+  || fail "no composition report on a rebuild"
+# now a rebuild that loses sshd + the NIC driver
+printf 'usr/bin/clevis\nbin/sh\n' > "$REBUILT"
+rm -f "$BTD/bootique.script"
+out=$(run install 2>&1) && fail "install exited 0 after dropping initramfs bits"
+printf '%s' "$out" | grep -q 'DROPPED 3 path' \
+  || fail "composition guard did not report the dropped count"
+printf '%s' "$out" | grep -q 'usr/sbin/sshd' \
+  || fail "composition guard did not name the dropped ssh server"
+printf '%s' "$out" | grep -q 'CHECK BEFORE YOU REBOOT' \
+  || fail "composition guard did not tell the operator to check"
+rm -f "$REBUILT"
+run install >/dev/null 2>&1 || fail "install non-zero once the drop settled"
+
+# the dracut lister: same guarantee through the ls -l table parser. Restore the
+# full manifest first -- the drop above is PERSISTENT (that is the point: the
+# warning is self-clearing), so without this there would be nothing left to drop
+# and the block would pass while asserting nothing.
+full_manifest > "$MANIFEST"
+LSFS=absent-lsinitramfs; LSRD=lsinitrd
+rm -f "$BTD/bootique.script"
+out=$(run install 2>&1) || fail "install failed on an intact rebuild (dracut)"
+printf '%s' "$out" | grep -q 'initramfs composition intact' \
+  || fail "no composition report via the dracut lister"
+printf 'usr/bin/clevis\nbin/sh\n' > "$REBUILT"
+rm -f "$BTD/bootique.script"
+out=$(run install 2>&1) && fail "dracut lister missed a dropped payload"
+printf '%s' "$out" | grep -q 'usr/sbin/sshd' \
+  || fail "dracut lister did not name the dropped ssh server"
+printf '%s' "$out" | grep -q 'bin/link' \
+  || fail "dracut lister did not name the dropped symlink"
+printf '%s' "$out" | grep -q 'dash' \
+  && fail "dracut lister took a symlink TARGET for a path"
+rm -f "$REBUILT"
+run install >/dev/null 2>&1 || fail "install non-zero once the drop settled (2)"
+
+# No lister at all must DEGRADE LOUDLY, not pass quietly: the cosmetics still
+# install (a missing tool is no reason to refuse), but the run says so.
+LSFS=absent-lsinitramfs; LSRD=absent-lsinitrd
+rm -f "$BTD/bootique.script"
+out=$(run install 2>&1) || fail "install failed with no initramfs lister"
+printf '%s' "$out" | grep -q 'composition NOT checked' \
+  || fail "guard skipped the composition check without saying so"
+LSFS=lsinitramfs; LSRD=absent-lsinitrd
 
 # --- KMS generator switch: initramfs-tools mode uses the hook, not the conf --
 USES_DRACUT=0
