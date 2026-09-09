@@ -40,6 +40,17 @@ OVMF_VARS=${OVMF_VARS:-/usr/share/OVMF/OVMF_VARS_4M.fd}
 
 mkdir -p "$SCRATCH" "$OUT" "$SCRATCH/share/theme"
 cp "$HERE/plymouth-prep.sh" "$SCRATCH/share/"
+# Which initramfs generator the guest should use (see plymouth-prep.sh). dracut
+# is what the real boxes run, and it changes WHO asks for the passphrase
+# (systemd-cryptsetup, not initramfs-tools), so both are worth a pass.
+PLYVM_INITRD=${PLYVM_INITRD:-initramfs-tools}
+case "$PLYVM_INITRD" in
+  initramfs-tools|dracut) printf '%s\n' "$PLYVM_INITRD" \
+    > "$SCRATCH/share/initrd-mode"
+    echo "vmcheck: guest initramfs generator: $PLYVM_INITRD" ;;
+  *) echo "vmcheck: PLYVM_INITRD must be initramfs-tools or dracut" >&2
+     exit 2 ;;
+esac
 _tf="bootique.plymouth bootique.script pill.png dot.png shutdown-bg.png"
 _tf="$_tf scrim.png"
 for f in $_tf; do

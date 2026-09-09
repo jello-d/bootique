@@ -84,6 +84,15 @@ def readuntil(pat, timeout):
     return False
 
 
+def drain(seconds):
+    # Read whatever the guest has said and log it. The frame-based prompt
+    # detector below reads no serial of its own, and nothing else reads the
+    # socket until the login step, so without this a guest that never reaches
+    # the prompt leaves an EMPTY log and the only diagnosis on offer is "no
+    # pill" -- which is what happened here, and cost a whole run to work out.
+    readuntil(r"(?!x)x", seconds)     # a pattern that cannot match: pure drain
+
+
 def pill_on_screen():
     # Is the splash showing the unlock pill? Screendump a probe frame and look
     # for the light-green pill band at the centre (~0.44 of the height, where
@@ -116,7 +125,7 @@ def pill_on_screen():
 # (silently proceeding produced plausible garbage frames before).
 deadline = time.time() + 180
 while time.time() < deadline and not pill_on_screen():
-    time.sleep(2.0)
+    drain(1.0)
 if time.time() >= deadline:
     print("CAPTURE FAILED: unlock pill never rendered", flush=True)
     sys.exit(2)

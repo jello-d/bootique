@@ -8,12 +8,14 @@ install, so it is run by hand, not on every change.
 
 ## Pieces
 
-- `build-luks-base` -- builds the base image the render runs against: boots a
-  noble cloud image as an installer and runs `tackdisk install` onto a blank
-  disk. EXTERNAL DEP: `tackdisk` (the day-zero disk installer) lives in a
-  separate checkout; point `TACKDISK_REPO` at it (default `$HOME/src/tackup`).
-  This is the one piece that reaches outside bootique -- installing a bootable
-  LUKS OS is the installer's job, not the theme's.
+- `build-luks-base` -- builds the base image the render runs against: boots an
+  Ubuntu cloud image as an installer and runs `tackdisk install` onto a blank
+  disk. `PLYVM_SUITE` picks the release (default `noble`) for both the installer
+  image and the debootstrapped suite, so they always match. EXTERNAL DEP:
+  `tackdisk` (the day-zero disk installer) lives in a separate checkout; point
+  `TACKDISK_REPO` at it (default `$HOME/src/tackup`). This is the one piece that
+  reaches outside bootique -- installing a bootable LUKS OS is the installer's
+  job, not the theme's.
 - `plymouth-vmcheck` -- the driver: injects THIS repo's theme (`plymouth/` +
   `background.png`) into an overlay on the base, boots, and screendumps. Reads
   the theme from the repo root by default (override `PLYVM_BOOTIQUE`).
@@ -27,13 +29,44 @@ install, so it is run by hand, not on every change.
   from a screenshot tool into a pass/fail test.
 - `vmexpect` -- a generic expect-over-serial-socket driver.
 
+## Initramfs generator: `PLYVM_INITRD`
+
+`initramfs-tools` (the default) is the path this harness verifies today, and it
+passes. `dracut` switches the guest to dracut, which matters because it is what
+a real box here runs AND it changes who asks for the passphrase: systemd-
+cryptsetup and systemd-ask-password, rather than initramfs-tools calling
+`plymouth ask-for-password`. The theme's rejected state depends on how that path
+sequences `display_normal`, so it deserves its own pass.
+
+Both modes pass, but the dracut one only on a base matching the target release,
+which is what `PLYVM_SUITE` is for:
+
+    PLYVM_SUITE=resolute sh test/vm/build-luks-base
+    PLYVM_INITRD=dracut sh test/vm/plymouth-vmcheck \
+        /var/tmp/plyvm/base-resolute-target.qcow2 testpass123
+
+On a NOBLE base the dracut mode proves nothing, and it is worth knowing why
+before trusting a green run there. noble ships dracut 060, whose plymouth module
+gates on a Fedora-ism Debian and Ubuntu never shipped, so the module is skipped
+and the initramfs gets no splash (`plymouth-prep.sh` shims that check; the shim
+is a harmless no-op on a release that does not need it). Even shimmed, that
+guest brings up no DRM device in the initramfs, so plymouth falls back to TEXT
+mode, the `script` plugin never loads, and no theme state can be observed at
+all. resolute ships dracut 110, which checks for `plymouth-populate-initrd`
+instead and works.
+
 ## Run
 
-    # once: drop a noble cloud image in the scratch dir
-    #   /var/tmp/plyvm/noble-server-cloudimg-amd64.img
+    # once per suite: drop its cloud image in the scratch dir, from
+    #   https://cloud-images.ubuntu.com/<suite>/current/
     sh test/vm/build-luks-base                 # ~5-8 min, needs TACKDISK_REPO
     sh test/vm/plymouth-vmcheck \
-        /var/tmp/plyvm/base-target.qcow2 testpass123
+        /var/tmp/plyvm/base-noble-target.qcow2 testpass123
+
+    # the dracut pass, on a base matching the release a real box runs
+    PLYVM_SUITE=resolute sh test/vm/build-luks-base
+    PLYVM_INITRD=dracut sh test/vm/plymouth-vmcheck \
+        /var/tmp/plyvm/base-resolute-target.qcow2 testpass123
 
 PNG frames land in `/var/tmp/plyvm/shots`. Needs `kvm`, `qemu-system-x86_64`,
 `OVMF`, `python3`, `imagemagick`, `socat`, `xorriso`. Host-side, NO sudo (the

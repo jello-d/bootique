@@ -1,13 +1,23 @@
 #!/bin/sh
 # build-luks-base -- build a clean LUKS+btrfs base image for plymouth-vmcheck to
-# render the splash against. Boots a noble cloud image as a headless installer,
-# runs `tackdisk install` onto a blank target disk, and powers off. The result
-# ($SCRATCH/base-target.qcow2) is a plain bootable target: a LUKS prompt at boot
+# render the splash against. Boots an Ubuntu cloud image as a headless
+# installer, runs `tackdisk install` onto a blank target disk, and powers off.
+# The result ($SCRATCH/base-<suite>-target.qcow2) is a plain bootable target: a
+# LUKS prompt at boot
 # and a tester/testerpass login over ttyS0, with the serial getty intact so the
 # render harness can drive it. NO firstboot fixture (that is the grub-btrfs
 # rollback test's concern, a separate harness).
 #
 #   build-luks-base [scratch-dir]             (default /var/tmp/plyvm)
+#
+# PLYVM_SUITE (default noble) picks the Ubuntu release to install, which is the
+# knob that decides how REPRESENTATIVE the base is. It selects both the cloud
+# image to boot as the installer and the suite tackdisk debootstraps, so the two
+# always match (a mismatch means the installer's debootstrap does not know the
+# suite it is asked to build). Use the release the target box runs when the test
+# depends on release-specific behaviour: the dracut render pass does, because
+# noble ships dracut 060 whose plymouth module never loads on Ubuntu, while a
+# current release ships 110 which works.
 #
 # EXTERNAL DEPENDENCY: the base is installed by `tackdisk`, the day-zero disk
 # installer, which lives in a separate checkout. Point TACKDISK_REPO at it
@@ -15,25 +25,25 @@
 # reaches outside bootique -- building a bootable LUKS OS is the installer's
 # job, not the theme's. Override PLYVM_BASE to write the image elsewhere.
 #
-# Prereqs in scratch-dir: noble-server-cloudimg-amd64.img (a stable Ubuntu cloud
-# image -- noble's debootstrap knows its suite; testing with it validates the
-# MECHANISM even though a box may run a later release). Needs qemu + xorriso +
-# kvm. Host-side, NO sudo (qemu+kvm only; the guest is root, which sidesteps a
+# Prereqs in scratch-dir: <suite>-server-cloudimg-amd64.img, from
+# cloud-images.ubuntu.com/<suite>/current/. Needs qemu + xorriso + kvm.
+# Host-side, NO sudo (qemu+kvm only; the guest is root, which sidesteps a
 # no-TTY sudo shell).
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 D=${1:-/var/tmp/plyvm}
-IMG=$D/noble-server-cloudimg-amd64.img
+SUITE=${PLYVM_SUITE:-noble}
+IMG=$D/$SUITE-server-cloudimg-amd64.img
 TACKDISK_REPO=${TACKDISK_REPO:-$HOME/src/tackup}
-TARGET=${PLYVM_BASE:-$D/base-target.qcow2}
-[ -r "$IMG" ] || { echo "build-luks-base: need $IMG (download a noble cloud" \
-  "image)" >&2; exit 2; }
+TARGET=${PLYVM_BASE:-$D/base-$SUITE-target.qcow2}
+[ -r "$IMG" ] || { echo "build-luks-base: need $IMG (get it from" \
+  "cloud-images.ubuntu.com/$SUITE/current/)" >&2; exit 2; }
 [ -x "$TACKDISK_REPO/tackdisk" ] || { echo "build-luks-base: no tackdisk at" \
   "$TACKDISK_REPO (set TACKDISK_REPO to the installer checkout)" >&2; exit 2; }
 mkdir -p "$D"
 cd "$D"
 
-echo "== building repo.iso from $TACKDISK_REPO =="
+echo "== building repo.iso from $TACKDISK_REPO (suite $SUITE) =="
 rm -f "$D/base-repo.iso"
 xorriso -as mkisofs -R -J -V INSTALLER -o "$D/base-repo.iso" \
   "$TACKDISK_REPO" >/dev/null 2>&1
@@ -47,17 +57,32 @@ cat > "$D/base-run.sh" <<'GUEST'
 set -x
 echo "##### install a clean LUKS+btrfs base #####"
 mkdir -p /mnt/repo && mount -o ro /dev/vdd /mnt/repo
+# Retry fetches: this install pulls a few hundred packages over whatever link
+# the host happens to have, and a single dropped connection otherwise fails the
+# whole run (seen: a flaky wifi took out a dozen packages and the install exited
+# 100 with a half-built target).
+printf 'Acquire::Retries "5";\n' > /etc/apt/apt.conf.d/99retries
 env TACKDISK_YES=1 TACKDISK_LUKS_PASS=testpass123 TACKDISK_USER=tester \
-    TACKDISK_PASS=testerpass TACKDISK_HOST=plyvm TACKDISK_SUITE=noble \
+    TACKDISK_PASS=testerpass TACKDISK_HOST=plyvm TACKDISK_SUITE="$SUITE" \
     TACKDISK_CONSOLE=console=ttyS0 \
     sh /mnt/repo/tackdisk install /dev/vdb
-echo "##### TACKDISK_INSTALL_EXIT=$? #####"
+_rc=$?
+echo "##### TACKDISK_INSTALL_EXIT=$_rc #####"
 sync
-echo "##### BASE DONE #####"
+# Only claim success if the installer actually succeeded. Echoing DONE
+# unconditionally produced a target that was not bootable at all, and the
+# failure did not surface until a LATER harness run died in the firmware with
+# "No bootable option or device was found".
+[ "$_rc" = 0 ] && echo "##### BASE DONE #####"
 } > /root/base.log 2>&1
 cat /root/base.log > /dev/ttyS0
 sync; poweroff -f
 GUEST
+
+# The guest script is a QUOTED heredoc (it is full of $ that must survive to
+# run in the guest), so the suite is injected as a guest-side assignment rather
+# than expanded when the file is written.
+sed -i "1a SUITE=$SUITE" "$D/base-run.sh"
 
 echo "== cloud-init seed (user-data/meta-data MUST be at the iso root) =="
 B64=$(base64 -w0 "$D/base-run.sh")
