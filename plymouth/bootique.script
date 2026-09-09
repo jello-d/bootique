@@ -2,7 +2,8 @@
 # theme for boot AND shutdown/reboot (branched on Plymouth.GetMode()): boot is
 # the misty-forest photo with a green "Unlock disk" pill prompt and a left-
 # aligned lavender boot-log scroll; shutdown/reboot is the warp field with a
-# CENTRED bright-green scroll under a mode label. NO brand on screen.
+# CENTRED bright-green scroll under a mode label. NO brand on screen. The
+# unlock prompt has three states and two install-time modes: see UNLOCK UX.
 #
 # RESIZE-SAFE: all geometry is recomputed from the LIVE window in relayout(),
 # which the refresh callback re-runs whenever the panel size changes. So if the
@@ -23,6 +24,7 @@
 #   green  #298033 -> 0.16 0.5 0.21        (Unlock prompt + hint)
 #   lavender #C3AEF5 -> 0.765 0.682 0.961  (boot scroll)
 #   bright green -> 0.20 0.92 0.38         (shutdown scroll + label)
+#   amber #F0B429 -> 0.941 0.706 0.161     (hint when the human MUST act)
 fun t(str, r, g, b, px) { return Image.Text(str, r, g, b, 1, "Sans " + px); }
 fun tb(str, r, g, b, px) {
   return Image.Text(str, r, g, b, 1, "Sans Bold " + px);
@@ -54,19 +56,38 @@ dot_max = 64;            # passphrase-dot sprite pool size
 # (see the scoping rule above) rather than shadowing with locals. Values are
 # filled by compute_geometry()/relayout(); the zeros are just placeholders.
 prompt_shown = 0; cur_bullets = 0;
-# auto-unlock UX: a password request is answered NON-interactively by clevis
-# (Tang, on the home network), but plymouth is asked to display it in PARALLEL
-# with clevis trying, so there is no clean "the human is needed" signal. We show
-# a quiet "Unlocking..." state and escalate to the real pill only after
-# grace_ticks frames with no typing (or the instant the user types). The window
-# is deliberately LONG, longer than ANY successful auto-unlock (incl a slow USB
-# NIC), so a slow-but-successful unlock NEVER flashes the pill; the pill appears
-# (BEFORE the user types) only once the wait is long enough that clevis has
-# genuinely failed and a passphrase is really needed.
-pw_start = 0;        # frame the password prompt began (0 = inactive)
-pw_escalated = 0;    # 1 once the real pill shows (grace elapsed or user typed)
-grace_ticks = 1500;  # LONG: must exceed any successful unlock (see above)
+# UNLOCK UX. A password request may be answered non-interactively by an
+# auto-unlock agent (clevis/Tang on the home network) that races the human for
+# the SAME request, and nothing in the protocol says which is expected: plymouth
+# is told to display the prompt at the instant clevis starts trying. So the pill
+# is LIVE from the first frame in every mode. That is not a new capability, it
+# is an existing one this theme used to hide: plymouthd owns the entry buffer,
+# so typing has always worked whether or not a pill was drawn, and whichever
+# answer lands first (typed or clevis) unlocks the disk.
+#
+# What carries the state is the HINT under the pill, in three states:
+#   racing    an auto-unlock may still answer, or you can type
+#   required  nothing else is coming, it is on you now
+#   rejected  the last answer was refused, type it again
+# Because the pill no longer gates the ability to act, the racing->required
+# timer is COSMETIC: getting it wrong relabels early or late, it can never
+# delay an unlock. That is what makes a timer acceptable here at all.
+#
+# unlock_mode: "remote" where an auto-unlock races the human, "local" where
+# typing is the only way in (no racing state, and no boot ever claims to be
+# auto-unlocking). GENERATED: setup.sh rewrites the assignment below at install
+# time, so keep it on ONE line in exactly this shape.
+unlock_mode = "remote";
+# race_ticks: how long the racing state lasts before it escalates to required.
+# Counted in on_refresh ticks, which the script plugin drives at about 50/s
+# (calibrated against a real boot journal, not read from source), so 1000 is
+# roughly 20s. See the COSMETIC note above for why the imprecision is safe.
+race_ticks = 1000;
+attempt = 0;         # password requests seen (a 2nd means the 1st was refused)
+race_start = 0;      # tick the first request opened (0 = none seen yet)
+race_over = 0;       # 1 once no auto-unlock can still answer
 tick = 0;            # per-frame counter (on_refresh)
+if (unlock_mode != "remote") { race_over = 1; }   # nothing to race for here
 W = 0; H = 0;
 sz_title = 0; sz_status = 0; dot_sz = 0; dot_pitch = 0; sz_hint = 0;
 sz_tail = 0; sz_esc = 0; pill_w = 0; pill_h = 0; pill_y = 0; edge_x = 0;
@@ -100,11 +121,13 @@ esc = Sprite(); esc.SetZ(5);
 scrim = Sprite(); scrim.SetZ(3);
 offlabel = Sprite();
 
-# centre SPRITE's IMG horizontally at Y.
+# centre SPRITE's IMG horizontally at Y. The explicit opacity is what makes a
+# sprite re-showable: see hide_prompt for why hiding one has to use opacity.
 fun centre(sprite, img, y) {
   sprite.SetImage(img);
   sprite.SetX((W - img.GetWidth()) / 2);
   sprite.SetY(y);
+  sprite.SetOpacity(1);
 }
 
 # compute_geometry: (re)derive every size/position from the LIVE window. Sizes
@@ -162,8 +185,34 @@ fun tail_redraw() {
   }
 }
 
+# draw_hint: the line under the pill, which is the entire state readout (see the
+# UNLOCK UX note above). Priority order: a refused answer first (it is the most
+# actionable thing on screen), then the racing state, then "it is on you". In
+# local mode race_over starts set, so this collapses to one calm green line.
+# Amber marks the two states where the boot cannot continue without the human.
+fun draw_hint() {
+  _hy = pill_y + pill_h + H * 0.015;
+  if (attempt > 1) {
+    _m = "incorrect passphrase, type it again";
+    centre(hint, tb(_m, 0.941, 0.706, 0.161, sz_hint), _hy);
+  } else {
+    if (race_over == 0) {
+      _m = "auto-unlocking on the home network, or type your passphrase";
+      centre(hint, t(_m, 0.16, 0.5, 0.21, sz_hint), _hy);
+    } else {
+      if (unlock_mode == "remote") {
+        _m = "auto-unlock did not answer, type your passphrase to continue";
+        centre(hint, tb(_m, 0.941, 0.706, 0.161, sz_hint), _hy);
+      } else {
+        _m = "type your passphrase to unlock the disk";
+        centre(hint, t(_m, 0.16, 0.5, 0.21, sz_hint), _hy);
+      }
+    }
+  }
+}
+
 # draw_prompt: the LUKS unlock prompt at current geometry -- a light-green pill
-# with dark-green passphrase dots, a green title above, a green hint below.
+# with dark-green passphrase dots, a green title above, the state hint below.
 # Called from on_password AND from relayout (so a resize repositions a prompt
 # that is already showing). dots re-take dot_img so a resize rescales them.
 fun draw_prompt(bullets) {
@@ -185,25 +234,18 @@ fun draw_prompt(bullets) {
       dot_pool[i].SetOpacity(0);
     }
   }
-  centre(hint, t("type your passphrase to unlock the disk",
-                 0.16, 0.5, 0.21, sz_hint), pill_y + pill_h + H * 0.015);
+  draw_hint();
 }
+# hide_prompt: opacity, NOT SetImage(NULL). VM-verified: clearing a sprite's
+# image leaves its last pixels on screen (plymouth repaints the region on a new
+# image, but a NULL one repaints nothing), so the pill and dots vanished while
+# the title and hint sat over the entire boot. That is how a stale "incorrect
+# passphrase" survived onto a boot that had in fact succeeded.
 fun hide_prompt() {
-  title.SetImage(NULL);
-  hint.SetImage(NULL);
+  title.SetOpacity(0);
+  hint.SetOpacity(0);
   pill.SetOpacity(0);
   for (i = 0; i < dot_max; i++) { dot_pool[i].SetOpacity(0); }
-}
-
-# draw_unlocking: the QUIET auto-unlock state -- no pill, a soft "Unlocking..."
-# title + hint, shown while clevis may still answer the request (the grace
-# window). draw_prompt replaces it once a passphrase is genuinely needed.
-fun draw_unlocking() {
-  centre(title, tb("Unlocking disk...", 0.16, 0.5, 0.21, sz_title), H * 0.39);
-  pill.SetOpacity(0);
-  for (i = 0; i < dot_max; i++) { dot_pool[i].SetOpacity(0); }
-  centre(hint, t("auto-unlocking on the home network...",
-                 0.16, 0.5, 0.21, sz_hint), pill_y + pill_h + H * 0.015);
 }
 
 # Esc-for-full-log affordance (boot only), pinned right of the dark band.
@@ -237,10 +279,7 @@ fun relayout() {
   compute_geometry();
   bg.SetImage(Image(bg_file).Scale(W, H));
   tail_redraw();
-  if (prompt_shown == 1) {
-    if (pw_escalated == 1) { draw_prompt(cur_bullets); }
-    else { draw_unlocking(); }
-  }
+  if (prompt_shown == 1) { draw_prompt(cur_bullets); }
   place_esc();
   place_shutdown();
 }
@@ -270,22 +309,43 @@ Plymouth.SetUpdateStatusFunction(on_status);
 
 # the LUKS unlock prompt: remember it is showing (so a resize can redraw it),
 # then draw. on_password never fires on shutdown, so the prompt stays hidden.
+# It fires once per KEYSTROKE as well as once per request, so a request is NEW
+# only when no prompt is currently up. A second request means the first answer
+# was refused (an auto-unlock agent submits nothing when it cannot reach its
+# anchor, so it never spends an attempt), and that is what drives the rejected
+# state. It relies on plymouth calling display_normal between the two; if it
+# ever does not, the hint simply stays on its previous state.
 fun on_password(prompt, bullets) {
+  if (prompt_shown == 0) {
+    attempt++;
+    # the race clock is the BOOT's, not this attempt's: it never restarts.
+    if (race_start == 0) { race_start = tick; }
+  }
   prompt_shown = 1;
   cur_bullets = bullets;
-  if (pw_start == 0) { pw_start = tick; }   # first request: start grace clock
-  if (bullets > 0) { pw_escalated = 1; }    # any typing -> the real pill now
-  if (pw_escalated == 1) { draw_prompt(bullets); }
-  else { draw_unlocking(); }
+  draw_prompt(bullets);
 }
+# attempt/race_start/race_over deliberately survive this: they describe the
+# BOOT, and a rejected passphrase must not rewind the state back to racing.
 fun on_normal() {
   prompt_shown = 0;
-  pw_start = 0;
-  pw_escalated = 0;
   hide_prompt();
 }
 Plymouth.SetDisplayPasswordFunction(on_password);
 Plymouth.SetDisplayNormalFunction(on_normal);
+
+# on_root_mounted: a BACKSTOP clear. plymouth does send display_normal after a
+# successful unlock on the stack this was measured on (counted in a VM: normal
+# fired at startup, at the rejection, and at the unlock), so on_normal already
+# covers it there. This costs four lines and covers a stack that does not, which
+# matters because the thing being prevented is a stale "incorrect passphrase"
+# sitting over a boot that in fact succeeded. Clearing late is harmless; the
+# root fs being mounted means the unlock is unambiguously over.
+fun on_root_mounted() {
+  prompt_shown = 0;
+  hide_prompt();
+}
+Plymouth.SetRootMountedFunction(on_root_mounted);
 
 # specific notices (cryptsetup, fsck, failures) also feed the scroll.
 fun on_message(text) { feed(text); }
@@ -299,12 +359,12 @@ fun on_refresh() {
   if (Window.GetWidth() != W) { _changed = 1; }
   if (Window.GetHeight() != H) { _changed = 1; }
   if (_changed == 1) { relayout(); }
-  # grace elapsed with no typing -> escalate the quiet state to the real pill
-  # (Tang is unreachable; a passphrase is genuinely needed).
-  if (prompt_shown == 1 && pw_escalated == 0 && pw_start > 0
-      && tick - pw_start >= grace_ticks) {
-    pw_escalated = 1;
-    draw_prompt(cur_bullets);
+  # the racing window closes: no auto-unlock is going to answer now, so stop
+  # implying one might. This is the one transition that MUST happen on its own,
+  # or the racing copy would linger forever on a box the anchor cannot reach.
+  if (race_over == 0 && race_start > 0 && tick - race_start >= race_ticks) {
+    race_over = 1;
+    if (prompt_shown == 1) { draw_hint(); }
   }
 }
 Plymouth.SetRefreshFunction(on_refresh);

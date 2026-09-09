@@ -40,6 +40,31 @@ on drift.
 .TP
 .B test
 Run the in-repo stub suite (no root; nothing on the box is touched).
+.SH UNLOCK PROMPT
+Where a network auto-unlock (clevis/Tang) exists it races the human for the same
+passphrase request, so the passphrase pill is live from the first frame in
+either mode and the hint under it carries the state:
+.IR racing " (an auto-unlock may still answer, or you can type),"
+.IR required " (nothing else is coming, reached on a ~20s timer so the racing"
+copy can never linger), and
+.IR rejected " (the last answer was refused)."
+A box with no auto-unlock skips
+.I racing
+and never claims to be auto-unlocking.
+.PP
+The Plymouth script language can read neither a file nor the kernel command
+line, so the mode is BAKED INTO THE THEME at install time. It is autodetected
+(is clevis present on this box?) unless overridden by
+.B BS_UNLOCK_MODE
+.RB ( local | remote | auto ,
+this run) or
+.I /etc/bootique/unlock-mode
+(persistent, and visible to
+.B check
+as an environment variable would not be).
+.B check
+compares the installed theme against what this box should have, so gaining or
+losing an auto-unlock reads as drift.
 .SH EARLY-KMS
 Forces the GPU driver + firmware into the initramfs so the panel is at native
 resolution before Plymouth's first frame (the post-unlock resize fix). A dracut
@@ -60,6 +85,14 @@ The installed Plymouth theme (bootique.plymouth, bootique.script, the PNGs).
 .TP
 .I /etc/default/grub.d/{bootique,splash}.cfg
 The GRUB_THEME and quiet-splash drop-ins.
+.TP
+.I /etc/bootique/unlock-mode
+Optional persistent unlock-mode override, one word:
+.B local
+or
+.BR remote .
+Written by an operator or a provisioning layer; bootique reads it and never
+creates or removes it.
 .SH SEE ALSO
 .BR plymouth (8),
 .BR grub-mkconfig (8),

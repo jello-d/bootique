@@ -88,9 +88,17 @@ done
 EOF
 chmod +x "$T/sbin"/*
 
+# Unlock-mode inputs, all sandboxed so the verdict never depends on whether the
+# HOST running the suite happens to have clevis: the detector looks for
+# BS_CLEVIS_BIN on PATH (a name nothing provides, until a test plants a stub)
+# and for a *clevis* dir under BS_DRACUT_MODDIR (an empty scratch dir here).
 USES_DRACUT=1; GPU=xe
+UMODE=auto; CLEVIS_BIN=absent-clevis; MODEFILE=$T/etc/bootique/unlock-mode
+DMODS=$T/dracut-mods; mkdir -p "$DMODS"
 run() {
   env -i PATH="$T/sbin:/usr/bin:/bin" NO_COLOR=1 ALT_STATE="$ALT_STATE" \
+    BS_UNLOCK_MODE="$UMODE" BS_CLEVIS_BIN="$CLEVIS_BIN" \
+    BS_MODE_FILE="$MODEFILE" BS_DRACUT_MODDIR="$DMODS" \
     GRUB_ASSETDIR="$GAD" GRUB_BG_DST="$GAD/background.png" \
     GRUB_THEME_DST="$GAD/theme.txt" GRUB_DROPIN_DST="$GDROP" \
     GRUB_SELECT_STAMP="$GAD/.sel.bg" GRUB_FRAME_STAMP="$GAD/.frame.spec" \
@@ -115,9 +123,16 @@ grep -q 'Bold 24' "$GAD/mono-bold.pf2" || fail "grub bold font wrong name"
 cmp -s "$HERE/grub/theme.txt" "$GAD/theme.txt" || fail "grub theme not placed"
 cmp -s "$HERE/grub/bootique.cfg" "$GDROP" || fail "grub drop-in not placed"
 grep -q '^quiet_boot="0"' "$L10" || fail "quiet_boot not flipped to 0"
-# plymouth side
+# plymouth side. bootique.script is GENERATED, not copied: with no clevis on
+# this sandbox's PATH the mode autodetects to local, so the installed copy must
+# differ from the repo source in exactly the baked mode line.
+grep -qx 'unlock_mode = "local";' "$BTD/bootique.script" \
+  || fail "installed theme not baked for the autodetected (local) unlock mode"
 cmp -s "$HERE/plymouth/bootique.script" "$BTD/bootique.script" \
-  || fail "plymouth script not placed"
+  && fail "installed theme is a verbatim copy (the mode was never baked in)"
+diff "$HERE/plymouth/bootique.script" "$BTD/bootique.script" \
+  | grep -cE '^[<>]' | grep -qx 2 \
+  || fail "generated theme differs from the source by more than the mode line"
 cmp -s "$HERE/background.png" "$BTD/background.png" \
   || fail "plymouth background not placed"
 [ "$(cat "$ALT_STATE")" = "$BTD/bootique.plymouth" ] \
@@ -150,6 +165,52 @@ run install >/dev/null 2>&1
 rm -f "$BDROP"
 run check >/dev/null 2>&1 && fail "check passed with the splash drop-in removed"
 run install >/dev/null 2>&1
+
+# --- unlock mode: autodetect, both overrides, and mode drift -----------------
+# clevis on the box means something races the human for the same passphrase
+# request, so the theme must carry the remote copy.
+printf '#!/bin/sh\nexit 0\n' > "$T/sbin/planted-clevis"
+chmod +x "$T/sbin/planted-clevis"
+CLEVIS_BIN=planted-clevis
+run install >/dev/null 2>&1 || fail "install (clevis present) exited non-zero"
+grep -qx 'unlock_mode = "remote";' "$BTD/bootique.script" \
+  || fail "clevis on the box did not autodetect to the remote unlock mode"
+run check >/dev/null 2>&1 || fail "check drifted right after a remote install"
+# The SAME theme once clevis is gone is real drift, not a settled box: it would
+# promise an auto-unlock that can no longer answer. check must say so.
+CLEVIS_BIN=absent-clevis
+run check >/dev/null 2>&1 && fail "check passed with a stale remote-mode theme"
+run install >/dev/null 2>&1
+grep -qx 'unlock_mode = "local";' "$BTD/bootique.script" \
+  || fail "install did not re-bake the theme back to local"
+
+# the persistent file override beats autodetection ...
+mkdir -p "$(dirname "$MODEFILE")"
+printf '# written by the provisioning layer\nremote\n' > "$MODEFILE"
+run install >/dev/null 2>&1 || fail "install (mode file) exited non-zero"
+grep -qx 'unlock_mode = "remote";' "$BTD/bootique.script" \
+  || fail "the mode file override was ignored"
+run check >/dev/null 2>&1 || fail "check drifted with the mode file honoured"
+# ... and the env override beats the file.
+UMODE=local
+run install >/dev/null 2>&1 || fail "install (BS_UNLOCK_MODE) exited non-zero"
+grep -qx 'unlock_mode = "local";' "$BTD/bootique.script" \
+  || fail "BS_UNLOCK_MODE did not override the mode file"
+# Anything that is neither local nor remote is incoherent: stop, do not guess.
+UMODE=sometimes
+run install >/dev/null 2>&1 && fail "install accepted a bogus BS_UNLOCK_MODE"
+UMODE=auto
+printf 'sometimes\n' > "$MODEFILE"
+run install >/dev/null 2>&1 && fail "install accepted a bogus mode file"
+# An override we cannot READ must stop too: falling back to autodetection there
+# would discard what the operator asked for and then call the result settled.
+: > "$MODEFILE"
+run install >/dev/null 2>&1 && fail "install accepted an empty mode file"
+printf 'remote\n' > "$MODEFILE"; chmod 000 "$MODEFILE"
+run install >/dev/null 2>&1 && fail "install ignored an unreadable mode file"
+chmod 644 "$MODEFILE"
+rm -f "$MODEFILE"
+run install >/dev/null 2>&1 || fail "install (mode file removed) non-zero"
 
 # --- KMS generator switch: initramfs-tools mode uses the hook, not the conf --
 USES_DRACUT=0

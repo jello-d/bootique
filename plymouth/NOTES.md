@@ -24,6 +24,72 @@ an initramfs rebuild). The naming wall: nothing deployed says tackup.
   treeline (~76% down, where the photo turns light); "Esc: full log" bottom-
   right in green, baseline-aligned with the newest scroll line.
 
+## The unlock prompt: three states, two modes
+
+The problem is that a password request carries NO "the human is needed" signal.
+`systemd-cryptsetup` issues one ask-password; plymouth is told to display it and
+`clevis-luks-askpass` reacts to the same file, concurrently. The theme's
+callback gets only `(prompt, bullets)`: no requester identity, no attempt state,
+and the prompt string is systemd's own either way. There is no runtime
+discriminator, so any answer here is either baked in at install time or pushed
+in over the message channel.
+
+An earlier design used the PILL ITSELF as the signal, hiding it behind a long
+grace so it appeared only once an auto-unlock had plainly failed. That made the
+timer load-bearing: the pill gated the user's ability to act, so a wrong guess
+cost real time (measured at ~30s per boot on a box that had no auto-unlock at
+all). Worse, the quiet state could linger indefinitely.
+
+Now the pill is LIVE from the first frame in both modes. That is not a new
+capability: plymouthd owns the entry buffer, so a blind-typed passphrase always
+worked, and whichever answer lands first (typed or clevis) unlocks the disk.
+What changes is the hint under it: `racing` -> `required` on a ~20s timer, or
+`rejected` when a second request means the first answer was refused. Because
+the pill no longer gates anything, the timer is COSMETIC, which is the whole
+reason a heuristic is tolerable here.
+
+`unlock_mode` ("remote" where something races, "local" where typing is the only
+way in) is GENERATED into the installed theme by `setup.sh`, autodetected from
+the box and overridable. A local-mode box never shows `racing` and never claims
+to be auto-unlocking.
+
+### VM-verified (2026-09-04), and what the run taught
+
+Both modes rendered and behaved correctly under tackup's
+`test/vm/plymouth-vmcheck` on real DRM. Three findings that were NOT guessable:
+
+- `SetImage(NULL)` DOES NOT ERASE A SPRITE. Plymouth repaints a sprite's region
+  when given a new image, but a NULL one repaints nothing, so the last pixels
+  stay on screen. `hide_prompt` cleared the pill and dots (opacity) while the
+  title and hint sat over the entire boot. That is a PRE-EXISTING bug, visible
+  in archived frames from before this work, and it got worse here because the
+  lingering line could read "incorrect passphrase" on a boot that succeeded.
+  Hide with `SetOpacity(0)`, and pair it with `SetOpacity(1)` in `centre()`.
+- The refresh rate assumption is now MEASURED, not inferred. Shooting a frame
+  every 4s across the racing window put the escalation between 15s and 19s for
+  `race_ticks = 1000`, which is the ~50/s the value was written against.
+- `display_normal` fires three times per boot (at startup, at a rejected
+  passphrase, and after a successful unlock) and root-mounted once after the
+  unlock. So the rejected state's "a second request means the first was
+  refused" assumption holds.
+
+The layout also passes at a second resolution (1920x1200), which exercises the
+fraction-based geometry and the verifier's fraction-resolved crop regions.
+
+BOTH ASKPASS PATHS are covered. The above is initramfs-tools, where the prompt
+comes from `plymouth ask-for-password`. The same three states also pass under
+dracut 110 + systemd-cryptsetup + systemd-ask-password, which is what a real box
+here runs, on a base built from the matching release (`PLYVM_SUITE=resolute`,
+see `test/vm/README.md` for why a noble base cannot answer this). That settles
+the one assumption this design rested on: `display_normal` DOES fire between a
+refused passphrase and the re-prompt on the systemd path, so `rejected` shows
+there too.
+
+Still worth building when convenient: `clevis-luks-askpass` knows the moment
+every binding has failed, and a `plymouth display-message` there would arrive in
+`on_message` and make `required` an EVENT instead of a timer. That lives in the
+initramfs, so it belongs to whatever owns the unlock mechanism, not here.
+
 ## The scroll data-flow (verified in the VM, not guessable)
 - The DENSE per-unit log flows through `SetUpdateStatusFunction`; the theme
   feeds each update into the rolling tail, so the tail is the boot log.

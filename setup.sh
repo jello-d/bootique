@@ -15,7 +15,9 @@
 # POSIX sh. sudo for privileged steps. Each piece is cmp/size/stamp-gated, so a
 # settled box is a no-op; the initramfs/grub regenerate only on a change.
 # Every system path is overridable (the in-repo test drives it against a scratch
-# tree with a stubbed sudo). Deps: grub-mkfont + ImageMagick `convert` (grub
+# tree with a stubbed sudo). The one per-box BEHAVIOUR knob is the unlock
+# prompt's mode (BS_UNLOCK_MODE / /etc/bootique/unlock-mode, autodetected by
+# default; see _load_mode). Deps: grub-mkfont + ImageMagick `convert` (grub
 # theme), DejaVu Sans Mono TTFs, plymouth; each missing piece degrades with a
 # note. NOT fused with the remote-unlock mechanism (a separate, boot-critical
 # owner); its dracut drop-ins just compose with this one's via update-initramfs.
@@ -229,7 +231,11 @@ EOF
 # =========================== Plymouth boot splash ===========================
 # plymouth's graphical screen from the LUKS passphrase prompt through systemd to
 # the greetd handoff. A 'script' theme (forest photo, a green unlock pill,
-# a rolling boot-log). Selected via the default.plymouth alternative; enabled by
+# a rolling boot-log). The theme is GENERATED per box, not copied: the unlock
+# prompt's copy differs where an auto-unlock (clevis/Tang) races the human, and
+# the plymouth script language can read no file and no kernel cmdline, so
+# install time is the only place that per-box fact can enter (see _load_mode).
+# Selected via the default.plymouth alternative; enabled by
 # a grub 'quiet splash' drop-in; the theme is BAKED INTO THE INITRAMFS (the
 # rebuild). EARLY-KMS forces the GPU driver + firmware into the initramfs so the
 # panel is native BEFORE the first frame (post-unlock resize fix; xe/dracut).
@@ -239,6 +245,14 @@ BS_ALT_NAME=${BS_ALT_NAME:-default.plymouth}
 BS_DROPIN=${BS_DROPIN:-/etc/default/grub.d/splash.cfg}
 BS_CMDLINE=${BS_CMDLINE:-quiet splash}
 BS_HOOK_DST=${BS_HOOK_DST:-/etc/initramfs-tools/hooks/bootique-kms}
+# The unlock prompt's mode (see the UNLOCK UX note in plymouth/bootique.script).
+# auto|local|remote, resolved by _load_mode below and BAKED into the
+# installed theme, because the plymouth script language can read no file and no
+# kernel cmdline: install time is the only place a per-box fact can enter.
+BS_UNLOCK_MODE=${BS_UNLOCK_MODE:-auto}
+BS_MODE_FILE=${BS_MODE_FILE:-/etc/bootique/unlock-mode}
+BS_CLEVIS_BIN=${BS_CLEVIS_BIN:-clevis}
+BS_DRACUT_MODDIR=${BS_DRACUT_MODDIR:-/usr/lib/dracut/modules.d}
 BS_DRACUT_CONF=${BS_DRACUT_CONF:-/etc/dracut.conf.d/90-bootique-kms.conf}
 BS_FW_ROOT=${BS_FW_ROOT:-/lib/firmware}
 UPDATE_INITRAMFS=${UPDATE_INITRAMFS:-update-initramfs}
@@ -259,11 +273,11 @@ _native_mode() {
 BS_GFXMODE=${BS_GFXMODE:-$(_native_mode)}
 
 # Theme files into BS_THEMEDIR: "<dst-name> <src-path>". background.png is
-# the shared photo (same source as the grub desktop-image).
+# the shared photo (same source as the grub desktop-image). bootique.script is
+# NOT here: it is generated per box (see _gen_script) rather than copied.
 _theme_files() {
   printf '%s\n' \
     "bootique.plymouth $_pkroot/bootique.plymouth" \
-    "bootique.script $_pkroot/bootique.script" \
     "pill.png $_pkroot/pill.png" \
     "dot.png $_pkroot/dot.png" \
     "shutdown-bg.png $_pkroot/shutdown-bg.png" \
@@ -279,6 +293,72 @@ _alt_is_bootique() {
       | awk '/^Value:/{print $2}')" = "$_alt_target" ]
 }
 
+# --- unlock mode: which prompt copy the installed theme carries ---------------
+# Precedence is explicit over detected:
+#   BS_UNLOCK_MODE=local|remote   an override for this run (tests, one-offs)
+#   $BS_MODE_FILE                 the PERSISTENT override a provisioning layer
+#                                 writes. A file, not an env var, because
+#                                 `check` is invoked with a bare environment by
+#                                 an integrator: an env-only override would be
+#                                 invisible there and every audit would report
+#                                 drift it could not explain.
+#   autodetect                    clevis tooling present -> something races us
+# Detection stays sudo-free on purpose. `check` must remain a cheap read-only
+# audit that can run unattended, and a sudo prompt inside it would HANG. So this
+# reads "this box carries clevis", not "this disk has a binding". That weaker
+# question is safe here because both misreadings are now harmless: the pill is
+# live and typeable in either mode, so the whole cost of guessing wrong is one
+# wrong line of hint copy. The file override covers the rest.
+_MODE= _MODE_WHY=
+_load_mode() {
+  case "$BS_UNLOCK_MODE" in
+    local|remote) _MODE=$BS_UNLOCK_MODE; _MODE_WHY=BS_UNLOCK_MODE; return 0 ;;
+    auto) : ;;
+    *) echo "$PKG: BS_UNLOCK_MODE must be auto, local or remote (got" \
+            "'$BS_UNLOCK_MODE')" >&2; exit 2 ;;
+  esac
+  # -e before -r: a file that EXISTS but cannot be read is an operator saying
+  # something we cannot hear. Falling through to autodetection there would
+  # silently discard an explicit override, then report the result as settled.
+  if [ -e "$BS_MODE_FILE" ]; then
+    [ -r "$BS_MODE_FILE" ] || { echo "$PKG: $BS_MODE_FILE exists but is not" \
+      "readable; refusing to guess the unlock mode" >&2; exit 2; }
+    _fm=$(awk 'NF && $1 !~ /^#/ {print $1; exit}' "$BS_MODE_FILE")
+    case "$_fm" in
+      local|remote) _MODE=$_fm; _MODE_WHY=$BS_MODE_FILE; return 0 ;;
+      '') echo "$PKG: $BS_MODE_FILE is empty; write 'local' or 'remote', or" \
+               "delete it to autodetect" >&2; exit 2 ;;
+      *) echo "$PKG: $BS_MODE_FILE: expected 'local' or 'remote', got" \
+              "'$_fm'" >&2; exit 2 ;;
+    esac
+  fi
+  if command -v "$BS_CLEVIS_BIN" >/dev/null 2>&1; then
+    _MODE=remote; _MODE_WHY='clevis present'; return 0
+  fi
+  for _cm in "$BS_DRACUT_MODDIR"/*clevis*; do
+    if [ -d "$_cm" ]; then
+      _MODE=remote; _MODE_WHY="dracut $(basename "$_cm")"; return 0
+    fi
+  done
+  _MODE=local; _MODE_WHY='no auto-unlock found'
+}
+
+# _gen_script <dst>: the theme with the resolved mode baked in. Comparing the
+# GENERATED content (not the source) is what keeps the plain cmp gate honest in
+# both directions: install still rewrites only on a real change, and check
+# compares the box against what this box SHOULD have, so a theme whose baked
+# mode no longer matches the box reads as drift instead of passing.
+_gen_script() {
+  sed "s|^unlock_mode = .*|unlock_mode = \"$_MODE\";|" \
+    "$_pkroot/bootique.script" > "$1"
+  # Fail loud: a renamed or reflowed marker line would otherwise ship the repo
+  # default to a box that needs the other mode, silently.
+  grep -qx "unlock_mode = \"$_MODE\";" "$1" || {
+    echo "$PKG: bootique.script has no 'unlock_mode = ' line to set" >&2
+    exit 1
+  }
+}
+
 # _place_theme <src> <dst> <label>: install a theme file (root 0644) when it
 # differs; a change flags an initramfs rebuild (the LUKS-prompt theme lives
 # there).
@@ -288,6 +368,11 @@ _place_theme() {
        echo "$PKG: wrote $3"; NEED_INITRAMFS=1; fi
 }
 place_theme() {
+  _st=$(mktemp)
+  _gen_script "$_st"
+  _place_theme "$_st" "$BS_THEMEDIR/bootique.script" \
+    "plymouth theme bootique.script ($_MODE unlock)"
+  rm -f "$_st"
   while read -r _name _srcpath; do
     [ -n "$_name" ] || continue
     _place_theme "$_srcpath" "$BS_THEMEDIR/$_name" "plymouth theme $_name"
@@ -382,6 +467,8 @@ place_kms() {
 }
 
 plymouth_install() {
+  _load_mode
+  echo "$PKG: unlock prompt mode: $_MODE ($_MODE_WHY)"
   place_theme
   select_theme
   place_dropin
@@ -389,6 +476,15 @@ plymouth_install() {
 }
 
 plymouth_check() {
+  _load_mode
+  ok "unlock prompt mode: $_MODE ($_MODE_WHY)"
+  _st=$(mktemp)
+  _gen_script "$_st"
+  cmp -s "$_st" "$BS_THEMEDIR/bootique.script" 2>/dev/null \
+    && ok "plymouth theme bootique.script current ($_MODE unlock)" \
+    || bad "plymouth theme bootique.script stale or wrong unlock mode \
+(install)"
+  rm -f "$_st"
   while read -r _name _srcpath; do
     [ -n "$_name" ] || continue
     cmp -s "$_srcpath" "$BS_THEMEDIR/$_name" 2>/dev/null \
