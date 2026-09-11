@@ -49,6 +49,37 @@ actually ADOPTED the renderer, because a run where it did not has not tested the
 replay path however green the rest of the output looks -- and a blank frame
 would otherwise bank a free pass on the one assertion that matters most.
 
+## Shutdown / reboot
+
+One theme serves boot AND shutdown, branched on `Plymouth.GetMode()`, and the
+`is_off` half -- warp background, centred bright-green scroll, scrim, bold mode
+label -- is nearly half the theme. It used to be checked by hand-editing
+`is_off=1` and re-running the BOOT harness, which exercises the layout but never
+the branch that SELECTS it, so the one thing that could not be tested was
+whether a real shutdown picks it at all.
+
+The capture now ends by pressing the ACPI power button over the qemu monitor
+(no login needed, so it costs no credentials) and screendumping in a tight loop.
+`sdhold.service` holds the splash: a guest with nothing to stop powers off in
+about a second, and the first attempt caught exactly one already-black frame.
+The ordering is the trick -- `plymouth-poweroff.service` runs LATE, so the usual
+slow-`ExecStop` delay would land while units are still stopping, before the
+shutdown splash exists. sdhold sits in the same late window instead, after the
+splash is up and before the thing that cuts power.
+
+Two assertions: the warp background REPLACED the forest (mean 0.23 against 0.77,
+not a close call), and the bold mode label is on screen. The label is found by
+COUNTING bright-green pixels rather than comparing bands -- on a radial warp the
+background varies enormously across the frame, so a spatial reference measures
+the background rather than the text, which is how the first attempt managed to
+measure noise. Bright-green-pixel fraction separates absolutely: 0.1224 in the
+label band on every frame that drew it, EXACTLY 0.0000 on every control.
+
+Frames that rendered nothing are excluded FIRST. A black frame is dark, so
+"dark means the warp is up" would otherwise be satisfied by a display that had
+already been torn down -- which is precisely what the first run did, reporting a
+cheerful pass over a single blank frame.
+
 KNOWN, and visible in the `boot-late-*` frames: the second display renders at
 its own size (1280x800) while the layout was computed for the primary
 (1440x900), so the boot-log scroll sits partly off its left edge. A `script`

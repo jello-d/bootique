@@ -253,6 +253,15 @@ its own POST) but confirm before assuming.
 
 ## Shutdown / reboot
 
+AUTOMATED 2026-09-11. This half used to be verified by temporarily forcing
+`is_off=1` so the BOOT harness rendered the shutdown layout -- which tests the
+layout but never the branch that SELECTS it, leaving "does a real shutdown pick
+this at all" untestable. The harness now presses the ACPI power button at the
+end of the capture and screendumps the actual shutdown, holding the splash with
+a unit ordered after plymouth-poweroff and before the poweroff itself (see
+test/vm/README.md). Verified: the warp background replaces the forest and the
+bold "Shutting down" label renders, both negative-controlled.
+
 One theme serves boot AND shutdown/reboot, branched on `Plymouth.GetMode()`
 (`is_off`). On shutdown/reboot: the **warp** field (`shutdown-bg.png`) replaces
 the forest, the scroll moves to **centre** in bright green (fed by the same

@@ -97,6 +97,37 @@ WantedBy=multi-user.target
 U
 systemctl enable late-renderer.service
 
+# Hold the SHUTDOWN splash the way plyhold holds the boot one. A guest with
+# nothing to stop powers off in about a second, which is not long enough to
+# screendump -- the first attempt caught a single already-black frame.
+#
+# The ordering is the whole trick. plymouth-poweroff.service runs LATE in the
+# shutdown transaction (it is ordered Before=systemd-poweroff.service), so the
+# usual "slow ExecStop on a normal unit" delay happens while units are still
+# being stopped, which is BEFORE the shutdown splash exists. This unit instead
+# sits in the same late window: after plymouth has put the splash up, before
+# the thing that actually cuts power.
+cat > /etc/systemd/system/sdhold.service <<'U'
+[Unit]
+Description=hold the shutdown splash for capture
+DefaultDependencies=no
+After=plymouth-poweroff.service plymouth-reboot.service
+Before=systemd-poweroff.service systemd-reboot.service
+# Only on the CAPTURE boot. This script's own poweroff happens seconds after
+# the unit is enabled, and holding THAT shutdown delays the "Power down" the
+# prep driver waits for, close enough to the boundary to fail intermittently.
+# The cmdline is the honest discriminator between the two boots: update-grub
+# runs at the END of this script, so the prep boot is still on the base
+# cmdline and only the capture boot carries the splash knobs.
+ConditionKernelCommandLine=plymouth.ignore-serial-consoles
+[Service]
+Type=oneshot
+ExecStart=/bin/sleep 18
+[Install]
+WantedBy=poweroff.target reboot.target
+U
+systemctl enable sdhold.service
+
 INITRD=$(cat /mnt/h/initrd-mode 2>/dev/null || echo initramfs-tools)
 echo "PLYPREP_INITRD=$INITRD"
 if [ "$INITRD" = dracut ]; then

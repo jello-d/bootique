@@ -29,10 +29,13 @@ def connect(path, tries=90):
     raise SystemExit("could not connect " + path)
 
 
-def mon(cmd):
+def mon(cmd, tries=90):
     # returns whatever the monitor said back, so a command that can FAIL
     # (device_add) can be reported rather than assumed to have worked.
-    s = connect(MON)
+    # `tries` matters once the guest is shutting down: the default retry loop
+    # sleeps a second per attempt, so calling this against a qemu that has
+    # already exited would block for a minute and a half per call.
+    s = connect(MON, tries)
     reply = b""
     try:
         s.settimeout(2)
@@ -51,8 +54,8 @@ def mon(cmd):
     return reply.decode("latin1", "replace")
 
 
-def shot(name, dev="gpu0"):
-    mon("screendump %s/%s.ppm %s 0" % (OUT, name, dev))
+def shot(name, dev="gpu0", tries=90):
+    mon("screendump %s/%s.ppm %s 0" % (OUT, name, dev), tries)
     print("[shot %s <- %s]" % (name, dev), flush=True)
 
 
@@ -190,4 +193,34 @@ for i in range(18):
 # 4) settle
 readuntil(r"login:", 40)
 shot("99-login")
+
+# 5) SHUTDOWN / REBOOT. One theme serves boot AND shutdown, branched on
+# Plymouth.GetMode(), and the is_off half -- warp background, centred bright
+# green scroll, scrim, bold mode label -- is nearly half the theme with no
+# automated coverage at all until now (it used to be checked by hand-editing
+# is_off=1 and re-running the BOOT harness, which tests the layout but never
+# the branch that selects it).
+#
+# The trigger is the monitor's ACPI power button rather than a login: the
+# capture boot never gets a shell, and this needs no credentials. systemd-logind
+# turns the button into a graceful poweroff, which is what brings the shutdown
+# splash up.
+#
+# Frames are shot in a tight loop because the splash is SHORT-LIVED -- a VM with
+# nothing to stop can be gone in a couple of seconds, so sampling slowly would
+# be a coin flip. The loop ends itself when the monitor stops answering, which
+# is the guest having powered off; that is the expected end, not a failure.
+print("[shutdown: ACPI power button]", flush=True)
+try:
+    mon("system_powerdown", tries=2)
+except SystemExit:
+    print("[shutdown: monitor already gone]", flush=True)
+for i in range(30):
+    time.sleep(0.5)
+    try:
+        shot("shutdown-%02d" % i, "gpu0", tries=1)
+    except SystemExit:
+        print("[shutdown: guest powered off after %d frame(s)]" % i, flush=True)
+        break
+
 print("CAPTURE DONE", flush=True)

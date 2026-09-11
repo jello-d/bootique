@@ -39,6 +39,25 @@ def _fx(png, expr, crop=None):
         return -1.0
 
 
+def green_frac(png, crop):
+    # fraction of pixels in crop that are BRIGHT GREEN the way the theme's
+    # shutdown label and scroll are (0.20/0.92/0.38). Used instead of a
+    # band-vs-band colour comparison where the BACKGROUND itself varies a lot
+    # across the frame -- on the radial warp field, brightness at the centre
+    # and at the edge have nothing to do with each other, so any spatial
+    # reference measures the background, not the text. Requiring green to lead
+    # BOTH other channels clearly excludes the warp's cyan rays (g~b) and its
+    # white ones (g~r).
+    args = ["convert", "%s/%s" % (OUT, png), "-crop", crop, "+repage",
+            "-fx", "(g>0.6 && g>r+0.3 && g>b+0.3) ? 1 : 0",
+            "-format", "%[fx:mean]", "info:"]
+    r = subprocess.run(args, capture_output=True, text=True)
+    try:
+        return float(r.stdout.strip())
+    except ValueError:
+        return -1.0
+
+
 def region(dims, wf, hf, xf, yf):
     # PIXEL crop geometry from fractions of the frame (dims=(w,h)). ImageMagick
     # crop OFFSETS are pixels, not percent, so resolve them here.
@@ -266,6 +285,54 @@ else:
     stale = _fx(boot, "mean.g-mean.r", band)
     check("prompt: cleared after unlock (no stale title over the boot)",
           stale < -0.010, "green score %.4f (want < -0.010)" % stale)
+
+# --- shutdown / reboot: the other half of the theme ---------------------------
+# One theme serves boot AND shutdown, branched on Plymouth.GetMode(). The is_off
+# half swaps the forest photo for the warp field, centres the scroll in bright
+# green and puts a bold mode label above it. It had NO automated coverage until
+# now: it was checked by hand-editing is_off=1 and running the BOOT harness,
+# which exercises the LAYOUT but never the branch that selects it -- so the one
+# thing that could not be tested was whether a real shutdown picks it at all.
+#
+# The background is the discriminator and it is not a close call: the warp
+# scores mean 0.23 where the forest scores 0.77.
+sd = sorted(f for f in os.listdir(OUT)
+            if f.startswith("shutdown-") and f.endswith(".png"))
+if not sd:
+    check("shutdown: frames captured", False)
+else:
+    # A BLACK frame is dark, so "dark means the warp is up" would be satisfied
+    # by a display that had already been torn down -- which is exactly what the
+    # first run caught (one frame, mean 0.000, and a cheerful pass). Only frames
+    # that actually rendered can answer anything, so they are selected FIRST.
+    means = [(f, _fx(f, "mean")) for f in sd]
+    drew = [(f, v) for f, v in means if v >= 0.05]
+    if not drew:
+        check("shutdown: the splash rendered before the guest powered off",
+              False, "%d frame(s), all blank (darkest %.3f) -- the splash was"
+              " missed or never came up" % (len(sd), min(v for _, v in means)))
+    else:
+        darkest, dv = min(drew, key=lambda t: t[1])
+        check("shutdown: the warp background replaced the forest", dv < 0.45,
+              "darkest rendered %.3f in %s (%d of %d frames drew, want < 0.45)"
+              % (dv, darkest, len(drew), len(sd)))
+        # The bold mode label ("Shutting down" / "Rebooting") sits centred just
+        # above the scroll, at tail_bottom - 8*tail_gap - 0.06H = 0.344H. It is
+        # found by COUNTING bright-green pixels, which separates cleanly where
+        # a band comparison did not: measured 0.1224 in this band on every
+        # shutdown frame that drew the label, against EXACTLY 0.0000 on every
+        # control -- the boot splash, a boot-scroll frame, and the warp itself
+        # away from the label. Checked across all rendered frames because the
+        # earliest ones can predate the label being drawn.
+        lab = region(_dims(darkest), 0.24, 0.035, 0.38, 0.3450)
+        best, best_f = -1.0, None
+        for f, _v in drew:
+            g = green_frac(f, lab)
+            if g > best:
+                best, best_f = g, f
+        check("shutdown: the bold mode label is on screen in green",
+              best > 0.02, "green pixels %.4f in %s (want > 0.02)"
+              % (best, best_f))
 
 if fails:
     print("VERIFY FAILED: " + ", ".join(fails), flush=True)
