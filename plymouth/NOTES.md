@@ -43,15 +43,62 @@ all). Worse, the quiet state could linger indefinitely.
 Now the pill is LIVE from the first frame in both modes. That is not a new
 capability: plymouthd owns the entry buffer, so a blind-typed passphrase always
 worked, and whichever answer lands first (typed or clevis) unlocks the disk.
-What changes is the hint under it: `racing` -> `required` on a ~20s timer, or
+What changes is the block AROUND it: `racing` -> `required` on a ~20s timer, or
 `rejected` when a second request means the first answer was refused. Because
 the pill no longer gates anything, the timer is COSMETIC, which is the whole
 reason a heuristic is tolerable here.
+
+In `racing` the auto-unlock OWNS THE HEADLINE and the pill is demoted to a
+labelled alternative underneath it, because that is the honest hierarchy: the
+thing actually happening is a network unlock, and a caption under a pill read
+as a footnote to a prompt that appeared to be waiting on the human. Under the
+headline is a progress track -- one cell per racing second, sprites rather than
+a text bar (a proportional font gives its glyphs different advance widths, so a
+text bar visibly JITTERS as it fills, and a block-drawing glyph may not even be
+in the font set plymouth carries into the initramfs) -- with the frontier cell
+pulsing at 2Hz. The pulse is load-bearing for the UX: a cell lands only once a
+second, which is far too slow on its own to read as activity rather than as a
+hang. The racing window and the tick rate it is counted in are ONE declaration
+each (`race_secs`, `tps`) with `race_ticks` DERIVED, so the countdown on screen
+and the moment the state escalates cannot drift apart.
 
 `unlock_mode` ("remote" where something races, "local" where typing is the only
 way in) is GENERATED into the installed theme by `setup.sh`, autodetected from
 the box and overridable. A local-mode box never shows `racing` and never claims
 to be auto-unlocking.
+
+### The post-unlock latch (the phase-2 pill)
+
+The prompt is LATCHED SHUT at root-mounted: after that, `on_password` draws
+nothing for the rest of the boot. Without it a pill reading "incorrect
+passphrase" appeared during the POST-SWITCH-ROOT half of the boot, over a boot
+that had already succeeded -- the single most confusing thing the splash could
+possibly say.
+
+What manifestor's journal establishes (boots of Sep 9/10/11, all identical):
+
+- `plymouthd` is the SAME PROCESS either side of switch-root (PID 475 from
+  16.7s in the initramfs to 34.3s at quit). It is not restarted, so every
+  script global -- `attempt` above all -- carries into phase 2.
+- systemd issues EXACTLY ONE ask-password. `systemd-ask-password-plymouth`
+  deactivates at 27.5s and never starts again, and there is one LUKS volume in
+  crypttab. So nothing legitimately asks for a passphrase in phase 2.
+- `nvidia-drm` loads at 28.9s and takes fb0 at 30.4s -- AFTER switch-root
+  (26.4s), while the splash is still up (quits 34.2s). A late renderer arrives
+  under a running theme.
+
+So the request that drove `attempt` from 1 to 2 was plymouth REPLAYING its
+state onto the new renderer, not a real second prompt. The latch is the fix,
+and it is the right shape independent of the cause: once the root fs is
+mounted, the disk is open, and no further password request is this theme's to
+draw.
+
+It is NOTED in the boot scroll ("ignoring a password request after unlock")
+rather than swallowed, and that line is also the DISCRIMINATOR for the one
+remaining possibility: if a pill ever shows up after the unlock WITHOUT that
+line, no callback fired and the cause is a stale framebuffer re-blit on the
+modeset instead -- which no theme can fix, and which needs the GPU driver in
+the initramfs (early-KMS, today xe-only).
 
 ### VM-verified (2026-09-04), and what the run taught
 

@@ -48,27 +48,61 @@ Where a network auto-unlock (clevis/Tang) exists it races the human for the
 *same* passphrase request: Plymouth is told to prompt at the instant clevis
 starts trying, and nothing in the protocol says which one is expected. So the
 pill is live from the first frame in either mode (typing has always worked;
-the theme used to hide that), and the hint under it carries the state:
+the theme used to hide that), and the block around it carries the state:
 
-| state    | hint                                                         |
-| -------- | ------------------------------------------------------------ |
-| racing   | auto-unlocking on the home network, or type your passphrase   |
-| required | auto-unlock did not answer, type your passphrase to continue  |
-| rejected | incorrect passphrase, type it again                           |
+| state    | what the screen says                                          |
+| -------- | ------------------------------------------------------------- |
+| racing   | **Unlocking automatically over the home network** as the       |
+|          | headline, a progress track counting its window down, and the   |
+|          | pill below under *or type your passphrase*                     |
+| required | amber **Auto-unlock did not answer** + *type your passphrase   |
+|          | to continue*                                                   |
+| rejected | amber *incorrect passphrase, type it again* under the pill     |
+
+While an auto-unlock is actually running it owns the headline, because that is
+the thing happening — a boot waiting on the network should say so rather than
+bury it in a caption. The track fills one cell per second with a pulsing head,
+so the wait reads as *active* rather than hung, and the seconds beside it say
+how long the racing copy has left.
 
 `required` arrives on a timer (~20s), so the racing copy can never linger on a
 box whose anchor is unreachable. Since the pill no longer gates the ability to
 type, that timer is cosmetic: guessing wrong relabels early or late, it can
-never delay an unlock.
+never delay an unlock. The window and the tick rate it is counted in are one
+declaration each, with the escalation derived from them, so the countdown on
+screen and the state change can never disagree.
+
+Once the root filesystem is mounted the prompt is **latched shut** for the rest
+of the boot. Plymouth replays its state to the theme when a late-loading GPU
+driver brings up a new renderer, which happens after switch-root on a discrete
+GPU; without the latch the theme read that replay as a second attempt and put a
+pill reading "incorrect passphrase" over a boot that had already succeeded.
 
 A box with no auto-unlock skips `racing` altogether and never claims to be
-auto-unlocking. Which mode a box gets is baked into the theme at install time,
-because the Plymouth script language can read neither a file nor the kernel
-command line:
+auto-unlocking. That is the whole point of the mode being a per-box fact:
+
+- `remote` — *expect a network unlock attempt.* Show the auto-unlock headline
+  and its track, and escalate to amber if nothing answers.
+- `local` — *never attempt, never imply one.* No racing state, no track, no
+  headline about a home network. A box that cannot auto-unlock must not make a
+  promise it cannot keep, so this is enforced in the theme rather than left to
+  copy: in `local` the racing state is closed before the first frame.
+
+Either way the pill is live and typeable, so the mode only ever changes what
+the screen *claims*, never what you can do. Which mode a box gets is baked into
+the theme at install time, because the Plymouth script language can read
+neither a file nor the kernel command line:
 
     ./setup.sh install                        # autodetect (is clevis here?)
     BS_UNLOCK_MODE=remote ./setup.sh install  # override, this run only
     echo remote | sudo tee /etc/bootique/unlock-mode   # persistent override
+
+The file is the hook for a provisioning layer: it is read by `check` too, which
+an environment variable would not be, so a box pinned by policy audits clean
+instead of reporting drift it cannot explain. Pin it explicitly on any box
+whose answer must not depend on detection — autodetection asks the cheap,
+sudo-free question ("does this box carry clevis?"), which is not the same as
+"is this disk actually bound to it".
 
 `check` compares the installed theme against what *this* box should have, so a
 box that gains or loses its auto-unlock reports drift instead of passing with

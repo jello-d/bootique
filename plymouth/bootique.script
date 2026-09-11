@@ -65,33 +65,50 @@ prompt_shown = 0; cur_bullets = 0;
 # so typing has always worked whether or not a pill was drawn, and whichever
 # answer lands first (typed or clevis) unlocks the disk.
 #
-# What carries the state is the HINT under the pill, in three states:
-#   racing    an auto-unlock may still answer, or you can type
-#   required  nothing else is coming, it is on you now
-#   rejected  the last answer was refused, type it again
+# What carries the state is the WHOLE prompt block, in three states:
+#   racing    an auto-unlock is trying RIGHT NOW; it is the headline, with a
+#             live track counting down its window, and the pill demoted to the
+#             clearly-labelled alternative
+#   required  nothing else is coming, it is on you now (amber)
+#   rejected  the last answer was refused, type it again (amber)
 # Because the pill no longer gates the ability to act, the racing->required
 # timer is COSMETIC: getting it wrong relabels early or late, it can never
 # delay an unlock. That is what makes a timer acceptable here at all.
 #
 # unlock_mode: "remote" where an auto-unlock races the human, "local" where
-# typing is the only way in (no racing state, and no boot ever claims to be
-# auto-unlocking). GENERATED: setup.sh rewrites the assignment below at install
-# time, so keep it on ONE line in exactly this shape.
+# typing is the only way in (no racing state, no track, and no boot ever claims
+# to be auto-unlocking -- a local box must never make that false promise).
+# GENERATED: setup.sh rewrites the assignment below at install time, so keep it
+# on ONE line in exactly this shape.
 unlock_mode = "remote";
-# race_ticks: how long the racing state lasts before it escalates to required.
-# Counted in on_refresh ticks, which the script plugin drives at about 50/s
-# (calibrated against a real boot journal, not read from source), so 1000 is
-# roughly 20s. See the COSMETIC note above for why the imprecision is safe.
-race_ticks = 1000;
+# The racing window, as ONE fact in seconds plus the tick rate it is counted
+# in. on_refresh is driven at about 50/s by the script plugin (calibrated
+# against a real boot journal, not read from source). race_ticks is DERIVED so
+# the on-screen countdown and the escalation can never disagree; both inherit
+# the same calibration, so a wrong rate makes the displayed seconds run fast or
+# slow rather than making the readout lie about the state.
+tps = 50;                     # on_refresh ticks per second (measured)
+race_secs = 20;               # how long the racing state lasts
+race_ticks = race_secs * tps;
+trk_n = race_secs;            # one track cell per racing second
 attempt = 0;         # password requests seen (a 2nd means the 1st was refused)
 race_start = 0;      # tick the first request opened (0 = none seen yet)
 race_over = 0;       # 1 once no auto-unlock can still answer
 tick = 0;            # per-frame counter (on_refresh)
+unlock_done = 0;     # 1 once the root fs is mounted: the unlock is OVER
+late_noted = 0;      # 1 once a post-unlock request has been noted in the log
+trk_filled = 0;      # track cells filled (= racing seconds elapsed)
+trk_head = 0;        # frontier-cell pulse phase (0/1)
+secs_left = 0;       # seconds left in the racing window
+next_sec = 0;        # tick the next second boundary lands on
+next_blink = 0;      # tick the next pulse flip lands on
 if (unlock_mode != "remote") { race_over = 1; }   # nothing to race for here
 W = 0; H = 0;
 sz_title = 0; sz_status = 0; dot_sz = 0; dot_pitch = 0; sz_hint = 0;
 sz_tail = 0; sz_esc = 0; pill_w = 0; pill_h = 0; pill_y = 0; edge_x = 0;
 tail_gap = 0; tail_bottom = 0; tail_x = 0; dot_img = NULL;
+net_y = 0; trk_y = 0; alt_y = 0; title_y = 0; trk_sz = 0; trk_pitch = 0;
+trk_x0 = 0; secs_x = 0; trk_img = NULL;
 
 # --- sprites: created ONCE up front so the layout helpers (defined next) can
 # reference them; positioned/scaled by relayout(). ---------------------------
@@ -113,6 +130,18 @@ for (i = 0; i < dot_max; i++) {
   dot_pool[i].SetZ(11);
   dot_pool[i].SetOpacity(0);
 }
+# The auto-unlock track: one sprite per racing second. SPRITES, not a text
+# progress bar -- a proportional font gives its glyphs different advance
+# widths, so a text bar visibly JITTERS as it fills, and a block-drawing glyph
+# may not even be in the font set plymouth carries into the initramfs. dot.png
+# is already a theme asset and scales cleanly.
+for (i = 0; i < trk_n; i++) {
+  trk_pool[i] = Sprite();
+  trk_pool[i].SetZ(10);
+  trk_pool[i].SetOpacity(0);
+}
+secs = Sprite();
+altlabel = Sprite();
 # esc (boot) and scrim/offlabel (shutdown) are created UNCONDITIONALLY so their
 # names always exist when place_esc/place_shutdown are defined (the language
 # resolves referenced names at definition time). Each is imaged only in its own
@@ -149,6 +178,21 @@ fun compute_geometry() {
   edge_x    = W * 0.03;    # left/right margin for the corner text
   tail_gap  = H * 0.024;   # vertical spacing between scroll lines
   dot_img   = Image("dot.png").Scale(dot_sz, dot_sz);
+  # The auto-unlock block, stacked ABOVE the pill: headline, the progress
+  # track, then the "or type your passphrase" label just over the pill itself.
+  # title_y is where the headline sits when there is NO track (the plain
+  # states); with the track the headline moves up to net_y to make room.
+  title_y   = H * 0.390;
+  net_y     = H * 0.330;
+  trk_y     = H * 0.375;
+  alt_y     = H * 0.410;
+  trk_sz    = H * 0.008;
+  trk_pitch = H * 0.013;
+  trk_img   = Image("dot.png").Scale(trk_sz, trk_sz);
+  trk_x0    = (W - ((trk_n - 1) * trk_pitch + trk_sz)) / 2;
+  # the seconds readout sits a fixed gap RIGHT of the track, so the track
+  # itself never shifts when the number loses a digit at 10 -> 9.
+  secs_x    = trk_x0 + (trk_n - 1) * trk_pitch + trk_sz + W * 0.012;
   # scroll block: boot = left, low in the dark foliage band; shutdown = centred
   # vertically in the warp.
   if (is_off == 1) {
@@ -185,39 +229,89 @@ fun tail_redraw() {
   }
 }
 
-# draw_hint: the line under the pill, which is the entire state readout (see the
-# UNLOCK UX note above). Priority order: a refused answer first (it is the most
-# actionable thing on screen), then the racing state, then "it is on you". In
-# local mode race_over starts set, so this collapses to one calm green line.
-# Amber marks the two states where the boot cannot continue without the human.
-fun draw_hint() {
+# hide_track: opacity, never SetImage(NULL) (see hide_prompt for why).
+fun hide_track() {
+  for (i = 0; i < trk_n; i++) { trk_pool[i].SetOpacity(0); }
+  secs.SetOpacity(0);
+}
+# draw_track: one filled cell per elapsed racing second, with the frontier cell
+# PULSING between frames. The pulse is what makes the row read as an activity
+# indicator rather than a static ruler: a cell lands only once a second, which
+# is too slow on its own to look like anything is happening.
+fun draw_track() {
+  for (i = 0; i < trk_n; i++) {
+    trk_pool[i].SetImage(trk_img);
+    trk_pool[i].SetX(trk_x0 + i * trk_pitch);
+    trk_pool[i].SetY(trk_y);
+    if (i < trk_filled) {
+      trk_pool[i].SetOpacity(1);
+    } else {
+      if (i == trk_filled && trk_head == 1) {
+        trk_pool[i].SetOpacity(0.7);
+      } else {
+        trk_pool[i].SetOpacity(0.25);
+      }
+    }
+  }
+  _si = t("" + secs_left + "s", 0.16, 0.5, 0.21, sz_hint);
+  secs.SetImage(_si);
+  secs.SetX(secs_x);
+  secs.SetY(trk_y - (sz_hint - trk_sz) / 2);
+  secs.SetOpacity(1);
+}
+
+# draw_state: the ENTIRE state readout -- headline, the auto-unlock track, the
+# "or type" label and the amber line under the pill -- in one function, so the
+# four elements can never contradict each other. Priority: a refused answer
+# first (the most actionable thing on screen), then a live auto-unlock, then
+# "it is on you". In local mode race_over starts set, so this collapses to one
+# calm green line and the netboot block is never drawn at all.
+fun draw_state() {
   _hy = pill_y + pill_h + H * 0.015;
   if (attempt > 1) {
-    _m = "incorrect passphrase, type it again";
-    centre(hint, tb(_m, 0.941, 0.706, 0.161, sz_hint), _hy);
+    # rejected: the auto-unlock stops being the story, the refusal is.
+    hide_track();
+    altlabel.SetOpacity(0);
+    centre(title, tb("Unlock disk to continue", 0.16, 0.5, 0.21, sz_title),
+           title_y);
+    centre(hint, tb("incorrect passphrase, type it again",
+                    0.941, 0.706, 0.161, sz_hint), _hy);
   } else {
     if (race_over == 0) {
-      _m = "auto-unlocking on the home network, or type your passphrase";
-      centre(hint, t(_m, 0.16, 0.5, 0.21, sz_hint), _hy);
+      # racing: the auto-unlock IS the headline and owns the middle of the
+      # screen; the pill stays live below it, labelled as the other way in.
+      hint.SetOpacity(0);
+      centre(title, tb("Unlocking automatically over the home network",
+                       0.16, 0.5, 0.21, sz_title), net_y);
+      draw_track();
+      centre(altlabel, t("or type your passphrase", 0.16, 0.5, 0.21, sz_hint),
+             alt_y);
     } else {
+      hide_track();
+      altlabel.SetOpacity(0);
       if (unlock_mode == "remote") {
-        _m = "auto-unlock did not answer, type your passphrase to continue";
-        centre(hint, tb(_m, 0.941, 0.706, 0.161, sz_hint), _hy);
+        # the window closed with no answer: amber, and say what happened
+        # rather than leaving the racing copy implying one is still coming.
+        centre(title, tb("Auto-unlock did not answer",
+                         0.941, 0.706, 0.161, sz_title), title_y);
+        centre(hint, tb("type your passphrase to continue",
+                        0.941, 0.706, 0.161, sz_hint), _hy);
       } else {
-        _m = "type your passphrase to unlock the disk";
-        centre(hint, t(_m, 0.16, 0.5, 0.21, sz_hint), _hy);
+        centre(title, tb("Unlock disk to continue", 0.16, 0.5, 0.21,
+                         sz_title), title_y);
+        centre(hint, t("type your passphrase to unlock the disk",
+                       0.16, 0.5, 0.21, sz_hint), _hy);
       }
     }
   }
 }
 
 # draw_prompt: the LUKS unlock prompt at current geometry -- a light-green pill
-# with dark-green passphrase dots, a green title above, the state hint below.
-# Called from on_password AND from relayout (so a resize repositions a prompt
-# that is already showing). dots re-take dot_img so a resize rescales them.
+# with dark-green passphrase dots, and whatever draw_state decides belongs
+# around it. Called from on_password AND from relayout (so a resize
+# repositions a prompt that is already showing). dots re-take dot_img so a
+# resize rescales them.
 fun draw_prompt(bullets) {
-  centre(title, tb("Unlock disk to continue", 0.16, 0.5, 0.21, sz_title),
-         H * 0.39);
   pill.SetImage(Image("pill.png").Scale(pill_w, pill_h));
   pill.SetX((W - pill_w) / 2);
   pill.SetY(pill_y);
@@ -234,7 +328,7 @@ fun draw_prompt(bullets) {
       dot_pool[i].SetOpacity(0);
     }
   }
-  draw_hint();
+  draw_state();
 }
 # hide_prompt: opacity, NOT SetImage(NULL). VM-verified: clearing a sprite's
 # image leaves its last pixels on screen (plymouth repaints the region on a new
@@ -245,6 +339,8 @@ fun hide_prompt() {
   title.SetOpacity(0);
   hint.SetOpacity(0);
   pill.SetOpacity(0);
+  altlabel.SetOpacity(0);
+  hide_track();
   for (i = 0; i < dot_max; i++) { dot_pool[i].SetOpacity(0); }
 }
 
@@ -315,15 +411,40 @@ Plymouth.SetUpdateStatusFunction(on_status);
 # anchor, so it never spends an attempt), and that is what drives the rejected
 # state. It relies on plymouth calling display_normal between the two; if it
 # ever does not, the hint simply stays on its previous state.
+#
+# The unlock_done branch is the LATCH: once the root fs is mounted the unlock
+# is over, and any further password request is not this disk's prompt. plymouth
+# replays its state to the theme when a late-loading GPU driver brings up a new
+# renderer (nvidia-drm here lands ~2s AFTER switch-root while the splash is
+# still up), and without the latch the theme counted that replay as a SECOND
+# attempt -- putting a pill and "incorrect passphrase" over a boot that had
+# already succeeded. It is NOTED in the boot log rather than swallowed: if a
+# pill ever appears after the unlock WITHOUT that line, no callback fired and
+# the cause is a stale framebuffer re-blit instead, which only early-KMS (the
+# GPU driver in the initramfs) can fix.
 fun on_password(prompt, bullets) {
-  if (prompt_shown == 0) {
-    attempt++;
-    # the race clock is the BOOT's, not this attempt's: it never restarts.
-    if (race_start == 0) { race_start = tick; }
+  if (unlock_done == 1) {
+    hide_prompt();
+    if (late_noted == 0) {
+      late_noted = 1;
+      feed("bootique: ignoring a password request after unlock");
+    }
+  } else {
+    if (prompt_shown == 0) {
+      attempt++;
+      # the race clock is the BOOT's, not this attempt's: it never restarts.
+      if (race_start == 0) {
+        race_start = tick;
+        next_sec = tick + tps;
+        next_blink = tick + tps / 2;
+        trk_filled = 0;
+        secs_left = race_secs;
+      }
+    }
+    prompt_shown = 1;
+    cur_bullets = bullets;
+    draw_prompt(bullets);
   }
-  prompt_shown = 1;
-  cur_bullets = bullets;
-  draw_prompt(bullets);
 }
 # attempt/race_start/race_over deliberately survive this: they describe the
 # BOOT, and a rejected passphrase must not rewind the state back to racing.
@@ -334,14 +455,14 @@ fun on_normal() {
 Plymouth.SetDisplayPasswordFunction(on_password);
 Plymouth.SetDisplayNormalFunction(on_normal);
 
-# on_root_mounted: a BACKSTOP clear. plymouth does send display_normal after a
-# successful unlock on the stack this was measured on (counted in a VM: normal
-# fired at startup, at the rejection, and at the unlock), so on_normal already
-# covers it there. This costs four lines and covers a stack that does not, which
-# matters because the thing being prevented is a stale "incorrect passphrase"
-# sitting over a boot that in fact succeeded. Clearing late is harmless; the
-# root fs being mounted means the unlock is unambiguously over.
+# on_root_mounted: the unlock is unambiguously OVER. It clears the prompt (a
+# backstop for on_normal, which does fire after a successful unlock on the
+# stack this was measured on) and, more importantly, ARMS THE LATCH so nothing
+# can put the prompt back up for the rest of the boot. Closing the race here
+# too keeps a late escalation from relabelling a prompt that is already gone.
 fun on_root_mounted() {
+  unlock_done = 1;
+  race_over = 1;
   prompt_shown = 0;
   hide_prompt();
 }
@@ -352,19 +473,46 @@ fun on_message(text) { feed(text); }
 Plymouth.SetMessageFunction(on_message);
 
 # on_refresh: the per-frame tick. Detect a panel-size change (the low-res ->
-# native modeset) and re-lay-out the whole splash so nothing is stranded.
+# native modeset) and re-lay-out the whole splash so nothing is stranded, then
+# advance the racing clock. Both the second boundary and the pulse advance on
+# tick COUNTS rather than by division, which keeps the on-screen seconds an
+# exact integer without depending on a Math builtin.
 fun on_refresh() {
   tick++;
   _changed = 0;
   if (Window.GetWidth() != W) { _changed = 1; }
   if (Window.GetHeight() != H) { _changed = 1; }
   if (_changed == 1) { relayout(); }
-  # the racing window closes: no auto-unlock is going to answer now, so stop
-  # implying one might. This is the one transition that MUST happen on its own,
-  # or the racing copy would linger forever on a box the anchor cannot reach.
-  if (race_over == 0 && race_start > 0 && tick - race_start >= race_ticks) {
-    race_over = 1;
-    if (prompt_shown == 1) { draw_hint(); }
+  if (race_over == 0 && race_start > 0) {
+    _redraw = 0;
+    if (tick >= next_blink) {
+      next_blink = tick + tps / 2;
+      if (trk_head == 1) { trk_head = 0; } else { trk_head = 1; }
+      _redraw = 1;
+    }
+    if (tick >= next_sec) {
+      next_sec = next_sec + tps;
+      trk_filled++;
+      # explicit subtraction, not `--`: only ++ is exercised anywhere else in
+      # this theme, and an unverified operator is not worth the risk in a file
+      # that can only be parse-checked by booting it.
+      secs_left = secs_left - 1;
+      _redraw = 1;
+    }
+    # the racing window closes: no auto-unlock is going to answer now, so stop
+    # implying one might. This is the one transition that MUST happen on its
+    # own, or the racing copy would linger forever on a box whose anchor is
+    # unreachable.
+    if (tick - race_start >= race_ticks) {
+      race_over = 1;
+      _redraw = 0;
+      if (prompt_shown == 1) { draw_state(); }
+    }
+    # The track is the RACING state's readout, and a refused passphrase
+    # OUTRANKS racing (draw_state hides the track in that case). Without this
+    # guard the next pulse would put the track straight back up underneath a
+    # "incorrect passphrase" headline -- two states on screen at once.
+    if (_redraw == 1 && prompt_shown == 1 && attempt < 2) { draw_track(); }
   }
 }
 Plymouth.SetRefreshFunction(on_refresh);

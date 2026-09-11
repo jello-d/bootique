@@ -43,17 +43,33 @@ Run the in-repo stub suite (no root; nothing on the box is touched).
 .SH UNLOCK PROMPT
 Where a network auto-unlock (clevis/Tang) exists it races the human for the same
 passphrase request, so the passphrase pill is live from the first frame in
-either mode and the hint under it carries the state:
-.IR racing " (an auto-unlock may still answer, or you can type),"
-.IR required " (nothing else is coming, reached on a ~20s timer so the racing"
-copy can never linger), and
-.IR rejected " (the last answer was refused)."
-A box with no auto-unlock skips
+either mode and the block around it carries the state.
+.TP
 .I racing
-and never claims to be auto-unlocking.
+The auto-unlock owns the headline ("Unlocking automatically over the home
+network") with a progress track filling one cell per second under it, and the
+pill sits below, labelled "or type your passphrase". A boot waiting on the
+network says so prominently instead of burying it in a caption.
+.TP
+.I required
+Amber: the window closed and nothing answered. Reached on a ~20s timer, so the
+racing copy can never linger on a box whose anchor is unreachable.
+.TP
+.I rejected
+Amber, under the pill: the last answer was refused.
+.PP
+Once the root filesystem is mounted the prompt is LATCHED SHUT for the rest of
+the boot. Plymouth replays its state when a late-loading GPU driver brings up a
+new renderer, and without the latch that replay counted as a second attempt,
+putting an "incorrect passphrase" pill over a boot that had already succeeded.
 .PP
 The Plymouth script language can read neither a file nor the kernel command
-line, so the mode is BAKED INTO THE THEME at install time. It is autodetected
+line, so the mode is BAKED INTO THE THEME at install time.
+.B remote
+means expect a network unlock attempt;
+.B local
+means never attempt and never imply one, so such a box shows no racing state, no
+track and no claim about a home network. It is autodetected
 (is clevis present on this box?) unless overridden by
 .B BS_UNLOCK_MODE
 .RB ( local | remote | auto ,
@@ -64,7 +80,10 @@ this run) or
 as an environment variable would not be).
 .B check
 compares the installed theme against what this box should have, so gaining or
-losing an auto-unlock reads as drift.
+losing an auto-unlock reads as drift. Pin the file on any box whose answer must
+not depend on detection: autodetection asks the cheap, sudo-free question (does
+this box carry clevis?), which is not the same as whether the disk is actually
+bound to it.
 .SH EARLY-KMS
 Forces the GPU driver + firmware into the initramfs so the panel is at native
 resolution before Plymouth's first frame (the post-unlock resize fix). A dracut

@@ -46,8 +46,15 @@ def region(dims, wf, hf, xf, yf):
     return "%dx%d+%d+%d" % (int(wf * w), int(hf * h), int(xf * w), int(yf * h))
 
 
-def check(name, cond):
-    print(("  PASS " if cond else "  FAIL ") + name, flush=True)
+def check(name, cond, detail=""):
+    # The measured value is PRINTED alongside every verdict, not just kept for
+    # a failure. These are colour deltas a few thousandths wide, so the numbers
+    # are how a threshold gets re-calibrated after a layout change -- without
+    # them the only way to retune is to re-run and instrument by hand.
+    line = ("  PASS " if cond else "  FAIL ") + name
+    if detail:
+        line += "   [" + detail + "]"
+    print(line, flush=True)
     if not cond:
         fails.append(name)
 
@@ -98,45 +105,85 @@ else:
     check("boot: bg fills (bottom-right non-black)", br > 0.05)
 
 # --- the unlock prompt's three states -----------------------------------------
-# bootique keeps the pill live and carries the state in the HINT under it: calm
-# green while an auto-unlock may still answer, amber once the timer says nothing
-# else is coming, amber again for a refused passphrase. The test compares the
-# hint band's red-vs-green BETWEEN frames rather than against a fixed number,
-# because all three share an identical background so the only difference is the
-# text colour. An absolute threshold would be worthless here: measured on real
-# frames, the bare forest photo scores 0.024 and sits BETWEEN the green text
-# (0.014) and the amber (0.032).
+# bootique keeps the pill live and carries the state in the block AROUND it.
+# While an auto-unlock is running it owns the headline HIGH on the screen (with
+# a progress track under it) and the pill is demoted to a labelled alternative;
+# once the window closes, or a passphrase is refused, the headline drops back to
+# its plain slot and the amber copy appears under the pill. So the states are
+# told apart by WHICH BAND carries text, not by one band changing colour.
+#
+# Every measurement is red-vs-green against the SAME band in the post-unlock
+# frame, where the latch guarantees nothing is drawn -- so the baseline is this
+# run's own bare photo rather than a number baked in here. Measured on real
+# frames: the photo scores 0.024, green text 0.014, amber 0.032, i.e. green
+# pulls the band DOWN by ~0.010 and amber pushes it UP by ~0.008.
+#
+# GEOMETRY: these fractions mirror bootique.script's compute_geometry (net_y
+# 0.330, title_y 0.390, and the hint at pill_y + pill_h + 0.015 = 0.505). Move
+# one and the other must follow.
 RACE, REQ, REJ = "01-luks-empty.png", "03-required.png", "04-rejected.png"
 if not (exists(RACE) and exists(REQ) and exists(REJ)):
     check("prompt state frames exist (racing/required/rejected)", False)
+elif boot is None:
+    check("a post-unlock frame exists (the photo baseline)", False)
 else:
     PD = _dims(RACE)
-    hint = region(PD, 0.6, 0.033, 0.2, 0.4978)
-    w_race = _fx(RACE, "mean.r-mean.g", hint)
-    w_req = _fx(REQ, "mean.r-mean.g", hint)
-    w_rej = _fx(REJ, "mean.r-mean.g", hint)
+    net = region(PD, 0.70, 0.030, 0.15, 0.3280)    # auto-unlock headline
+    ttl = region(PD, 0.45, 0.030, 0.275, 0.3880)   # plain-state headline
+    hnt = region(PD, 0.60, 0.033, 0.20, 0.4978)    # amber line under the pill
+    trk = region(PD, 0.32, 0.020, 0.34, 0.3730)    # the progress track row
+
+    def rg(png, band):
+        return _fx(png, "mean.r-mean.g", band)
+
+    b_net, b_ttl, b_hnt = rg(boot, net), rg(boot, ttl), rg(boot, hnt)
     if MODE == "remote":
-        # The required state MUST arrive on its own: a racing hint that never
-        # escalated would leave "an auto-unlock may still answer" up forever.
-        check("prompt: racing hint escalates to the amber required hint",
-              w_req - w_race > 0.010)
+        # racing: the auto-unlock headline is UP and green. This is the whole
+        # point of the promoted layout -- a boot that is waiting on the network
+        # must SAY so, prominently, not bury it in a line under the pill.
+        d = b_net - rg(RACE, net)
+        check("prompt: racing shows the green auto-unlock headline",
+              d > 0.006, "green delta %.4f (want > 0.006)" % d)
+        # and it must GIVE UP on its own: headline gone from the racing slot,
+        # amber copy in the plain slot. A racing headline that never escalated
+        # would promise an auto-unlock forever on a box whose anchor is down.
+        gone = abs(rg(REQ, net) - b_net)
+        amber = rg(REQ, ttl) - b_ttl
+        check("prompt: racing headline clears when the window closes",
+              gone < 0.005, "residual %.4f (want < 0.005)" % gone)
+        check("prompt: required state states it in amber",
+              amber > 0.005, "amber delta %.4f (want > 0.005)" % amber)
+        # INFO, not an assertion: the track is 20 small sprites over a wide
+        # band, so its colour signal is far weaker than text and has never been
+        # measured on a real frame. Printed so the first real run calibrates it;
+        # promote to a check once there is a number to set a threshold from.
+        print("  INFO  track row green delta %.4f (racing)"
+              % (b_ttl - rg(RACE, trk)), flush=True)
     else:
-        # local mode: nothing races the human here, so the hint must NOT
-        # escalate and no boot may ever claim to be auto-unlocking. The whole
-        # point of the mode split is that such a box waits for nothing.
+        # local mode: nothing races the human here, so the auto-unlock headline
+        # must NEVER appear and the state must never escalate. This is the mode
+        # split earning its keep -- a box with no auto-unlock must not make a
+        # promise it cannot keep, in any frame of any boot.
+        claim = abs(rg(RACE, net) - b_net)
+        check("prompt: local mode never claims to be auto-unlocking",
+              claim < 0.005, "headline delta %.4f (want < 0.005)" % claim)
+        moved = abs(rg(REQ, ttl) - rg(RACE, ttl))
         check("prompt: local mode never escalates (nothing to wait for)",
-              abs(w_req - w_race) < 0.004)
+              moved < 0.004, "drift %.4f (want < 0.004)" % moved)
+    # a refused passphrase is amber under the pill in BOTH modes.
+    rej = rg(REJ, hnt) - b_hnt
     check("prompt: a refused passphrase switches the hint to amber",
-          w_rej - w_race > 0.008)
-    # And the prompt must be GONE once the disk is open. plymouth leaves a
-    # sprite's last pixels on screen when its image is cleared to NULL, which
-    # left the title and hint painted over the whole boot -- so a boot that
-    # succeeded could still read "incorrect passphrase". The title band is a
-    # clean detector: green text scores +0.004 there, the bare photo -0.024.
-    if boot is not None:
-        title_band = region(_dims(boot), 0.5, 0.034, 0.25, 0.3844)
-        check("prompt: cleared after unlock (no stale title over the boot)",
-              _fx(boot, "mean.g-mean.r", title_band) < -0.010)
+          rej > 0.005, "amber delta %.4f (want > 0.005)" % rej)
+    # And the prompt must be GONE once the disk is open -- in BOTH headline
+    # slots. plymouth leaves a sprite's last pixels on screen when its image is
+    # cleared to NULL, which once left the title painted over the whole boot, so
+    # a boot that succeeded could still read "incorrect passphrase". Since the
+    # theme now also LATCHES the prompt shut at root-mounted, this doubles as
+    # the check that a replayed password request cannot put the pill back.
+    band = region(_dims(boot), 0.5, 0.034, 0.25, 0.3844)
+    stale = _fx(boot, "mean.g-mean.r", band)
+    check("prompt: cleared after unlock (no stale title over the boot)",
+          stale < -0.010, "green score %.4f (want < -0.010)" % stale)
 
 if fails:
     print("VERIFY FAILED: " + ", ".join(fails), flush=True)
