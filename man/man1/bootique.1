@@ -72,7 +72,8 @@ resolution before Plymouth's first frame (the post-unlock resize fix). A dracut
 drop-in on a dracut box with an
 .B xe
 GPU, the initramfs-tools hook otherwise, nothing on a non-xe box. It composes
-with other initramfs drop-ins (e.g. a remote-unlock dropbear) via
+with other initramfs drop-ins (e.g. an early-boot ssh server for remote unlock)
+via
 .BR update-initramfs .
 .SH FILES
 .TP

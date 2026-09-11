@@ -523,8 +523,8 @@ EOF
 # boots without the thing that unlocks it, and nothing would notice until the
 # reboot. So: list the image before and after, and report anything that
 # DISAPPEARED. Deliberately mechanism-AGNOSTIC, it never learns what clevis or
-# dropbear are: that keeps bootique unfused from the unlock mechanism while
-# still refusing to drop it on the floor quietly.
+# an early-boot sshd are: that keeps bootique unfused from the unlock mechanism
+# while still refusing to drop it on the floor quietly.
 BS_INITRD_DIR=${BS_INITRD_DIR:-/boot}
 LSINITRAMFS=${LSINITRAMFS:-lsinitramfs}
 LSINITRD=${LSINITRD:-lsinitrd}

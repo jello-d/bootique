@@ -21,8 +21,8 @@ the initramfs + `grub.cfg`.
   panel is at native resolution *before* Plymouth's first frame, killing the
   post-unlock resize/zoom. Self-gating: a dracut `force_drivers` drop-in on a
   dracut box with an `xe` GPU, the initramfs-tools hook otherwise, nothing on a
-  non-xe box. Composes with other initramfs drop-ins (e.g. a remote-unlock
-  dropbear) via `update-initramfs -u`.
+  non-xe box. Composes with other initramfs drop-ins (e.g. an early-boot ssh
+  server for remote unlock) via `update-initramfs -u`.
 
 ## Install
 
