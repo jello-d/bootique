@@ -104,6 +104,59 @@ else:
     br = _fx(boot, "mean", region(BD, 0.12, 0.12, 0.85, 0.85))
     check("boot: bg fills (bottom-right non-black)", br > 0.05)
 
+# --- the LATCH: no prompt may come back after the unlock ----------------------
+# Once the root fs is mounted the theme latches the prompt shut, because
+# plymouth REPLAYS its password state onto a renderer that attaches late -- a
+# discrete GPU whose driver loads after switch-root, with the splash still up --
+# and the theme counted that replay as a second attempt, putting a pill reading
+# "incorrect passphrase" over a boot that had already succeeded.
+#
+# EVERY post-unlock frame is checked, not just one: a replay lands whenever the
+# driver happens to load, so sampling a single frame would miss it by timing.
+# The detector is the same light-green pill band the capture uses to FIND the
+# prompt, so a pill that is visible enough to drive the capture is visible
+# enough to fail this.
+shots = sorted(f for f in os.listdir(OUT)
+               if f.startswith("boot-") and f.endswith(".png"))
+# A frame with nothing drawn in it cannot show a pill, so counting it as a pass
+# would be a silent lie -- and the late-renderer frames are exactly where that
+# can happen (if plymouth declines to attach the second DRM device, gpu1 stays
+# blank). Split them out and REPORT them instead of quietly banking a green.
+live = [f for f in shots if _fx(f, "mean") >= 0.05]
+blank = [f for f in shots if f not in live]
+late_live = [f for f in live if f.startswith("boot-late")]
+late_all = [f for f in shots if f.startswith("boot-late")]
+if not live:
+    check("latch: post-unlock frames exist and rendered", False)
+else:
+    worst, worst_f = -9.0, None
+    for f in live:
+        pb = region(_dims(f), 0.4, 0.06, 0.3, 0.44)
+        # score it as the WEAKER of the two margins, so one number answers
+        # "is there a pill here" the same way the capture's detector does.
+        s = min(_fx(f, "mean.g-mean.r", pb) - 0.04,
+                _fx(f, "mean.g-mean.b", pb) - 0.06)
+        if s > worst:
+            worst, worst_f = s, f
+    check("latch: no pill in any of the %d post-unlock frames" % len(live),
+          worst < 0, "worst %.4f in %s (want < 0)" % (worst, worst_f))
+if blank:
+    print("  INFO  %d post-unlock frame(s) rendered nothing, so they assert"
+          " nothing: %s" % (len(blank), ", ".join(blank)), flush=True)
+# The late renderer is the whole point of the second display device, so say
+# plainly whether it was exercised. A run where plymouth never adopted it has
+# NOT tested the replay path, however green the rest of the output looks.
+if not late_all:
+    print("  INFO  no late-renderer frames captured this run", flush=True)
+elif late_live:
+    print("  INFO  late renderer ADOPTED by plymouth (%d of %d frames drew);"
+          " the replay path was exercised"
+          % (len(late_live), len(late_all)), flush=True)
+else:
+    print("  INFO  late renderer NOT adopted (all %d frames blank); the"
+          " replay path was NOT exercised this run" % len(late_all),
+          flush=True)
+
 # --- the unlock prompt's three states -----------------------------------------
 # bootique keeps the pill live and carries the state in the block AROUND it.
 # While an auto-unlock is running it owns the headline HIGH on the screen (with
@@ -127,23 +180,29 @@ if not (exists(RACE) and exists(REQ) and exists(REJ)):
 elif boot is None:
     check("a post-unlock frame exists (the photo baseline)", False)
 else:
+    # Bands are kept TIGHT around the text/sprites they measure. A generous band
+    # is mostly background, which dilutes the signal into the noise: the same
+    # rejected hint scored +0.0064 in a 0.60-wide band and +0.0257 in this one,
+    # i.e. the loose band passed its threshold by 1.3x and this one by 2.5x.
+    # Every threshold below is a measured value with margin, not a guess.
     PD = _dims(RACE)
     net = region(PD, 0.70, 0.030, 0.15, 0.3280)    # auto-unlock headline
     ttl = region(PD, 0.45, 0.030, 0.275, 0.3880)   # plain-state headline
-    hnt = region(PD, 0.60, 0.033, 0.20, 0.4978)    # amber line under the pill
-    trk = region(PD, 0.32, 0.020, 0.34, 0.3730)    # the progress track row
+    hnt = region(PD, 0.24, 0.020, 0.38, 0.5020)    # amber line under the pill
+    trk = region(PD, 0.18, 0.014, 0.41, 0.3755)    # the progress track row
 
     def rg(png, band):
         return _fx(png, "mean.r-mean.g", band)
 
     b_net, b_ttl, b_hnt = rg(boot, net), rg(boot, ttl), rg(boot, hnt)
+    b_trk = rg(boot, trk)
     if MODE == "remote":
         # racing: the auto-unlock headline is UP and green. This is the whole
         # point of the promoted layout -- a boot that is waiting on the network
         # must SAY so, prominently, not bury it in a line under the pill.
         d = b_net - rg(RACE, net)
         check("prompt: racing shows the green auto-unlock headline",
-              d > 0.006, "green delta %.4f (want > 0.006)" % d)
+              d > 0.020, "green delta %.4f (want > 0.020)" % d)
         # and it must GIVE UP on its own: headline gone from the racing slot,
         # amber copy in the plain slot. A racing headline that never escalated
         # would promise an auto-unlock forever on a box whose anchor is down.
@@ -152,13 +211,36 @@ else:
         check("prompt: racing headline clears when the window closes",
               gone < 0.005, "residual %.4f (want < 0.005)" % gone)
         check("prompt: required state states it in amber",
-              amber > 0.005, "amber delta %.4f (want > 0.005)" % amber)
-        # INFO, not an assertion: the track is 20 small sprites over a wide
-        # band, so its colour signal is far weaker than text and has never been
-        # measured on a real frame. Printed so the first real run calibrates it;
-        # promote to a check once there is a number to set a threshold from.
-        print("  INFO  track row green delta %.4f (racing)"
-              % (b_ttl - rg(RACE, trk)), flush=True)
+              amber > 0.010, "amber delta %.4f (want > 0.010)" % amber)
+        # The TRACK has to be present while racing and GONE once the window
+        # closes -- a progress bar left over a state it no longer describes is
+        # worse than none.
+        tp = b_trk - rg(RACE, trk)
+        tg = abs(rg(REQ, trk) - b_trk)
+        check("track: present while racing", tp > 0.008,
+              "green delta %.4f (want > 0.008)" % tp)
+        check("track: gone once the window closes", tg < 0.004,
+              "residual %.4f (want < 0.004)" % tg)
+        # ...and it must actually ADVANCE. This is the claim the whole promoted
+        # layout rests on: the row says the wait is PROGRESSING, so a track that
+        # renders but never fills would be a lie the other checks cannot catch.
+        # Measured across one racing window: -0.017 -> -0.024 -> -0.031 ->
+        # -0.039 as cells land, then 0 at the escalation.
+        seq = []
+        for f in sorted(os.listdir(OUT)):
+            if f.startswith("race-") and f.endswith(".png"):
+                v = b_trk - _fx(f, "mean.r-mean.g",
+                                region(_dims(f), 0.18, 0.014, 0.41, 0.3755))
+                if v > 0.008:            # the track is still on screen here
+                    seq.append((f, v))
+        if len(seq) < 2:
+            check("track: advances as the window elapses", False,
+                  "only %d racing frame(s) showed a track" % len(seq))
+        else:
+            grew = seq[-1][1] - seq[0][1]
+            check("track: advances as the window elapses", grew > 0.004,
+                  "grew %.4f over %d frames, %s -> %s (want > 0.004)"
+                  % (grew, len(seq), seq[0][0], seq[-1][0]))
     else:
         # local mode: nothing races the human here, so the auto-unlock headline
         # must NEVER appear and the state must never escalate. This is the mode
@@ -173,7 +255,7 @@ else:
     # a refused passphrase is amber under the pill in BOTH modes.
     rej = rg(REJ, hnt) - b_hnt
     check("prompt: a refused passphrase switches the hint to amber",
-          rej > 0.005, "amber delta %.4f (want > 0.005)" % rej)
+          rej > 0.010, "amber delta %.4f (want > 0.010)" % rej)
     # And the prompt must be GONE once the disk is open -- in BOTH headline
     # slots. plymouth leaves a sprite's last pixels on screen when its image is
     # cleared to NULL, which once left the title painted over the whole boot, so

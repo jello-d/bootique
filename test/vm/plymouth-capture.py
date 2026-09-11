@@ -13,7 +13,7 @@
 # keyboard grab; serial input does not once plymouth owns the prompt), which
 # also fills the pill with bullets. screendump targets the virtio-gpu device by
 # id (gpu0) so it captures plymouth's scanout, not the stale firmware surface.
-import socket, time, sys, re, subprocess
+import socket, time, sys, re, os, subprocess
 
 SER, MON, OUT, PASS = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
@@ -30,7 +30,10 @@ def connect(path, tries=90):
 
 
 def mon(cmd):
+    # returns whatever the monitor said back, so a command that can FAIL
+    # (device_add) can be reported rather than assumed to have worked.
     s = connect(MON)
+    reply = b""
     try:
         s.settimeout(2)
         try:
@@ -40,16 +43,17 @@ def mon(cmd):
         s.sendall((cmd + "\n").encode())
         time.sleep(0.25)
         try:
-            s.recv(8192)
+            reply = s.recv(8192)
         except OSError:
             pass
     finally:
         s.close()
+    return reply.decode("latin1", "replace")
 
 
-def shot(name):
-    mon("screendump %s/%s.ppm gpu0 0" % (OUT, name))
-    print("[shot %s]" % name, flush=True)
+def shot(name, dev="gpu0"):
+    mon("screendump %s/%s.ppm %s 0" % (OUT, name, dev))
+    print("[shot %s <- %s]" % (name, dev), flush=True)
 
 
 def typestr(s):
@@ -165,10 +169,23 @@ shot("02-luks-bullets")
 typestr(PASS[split:])
 mon("sendkey ret")
 
-# 3) plyhold keeps the splash up ~25s; shoot the post-unlock dense scroll
+# 3) plyhold keeps the splash up ~25s; shoot the post-unlock dense scroll, and
+# with it the LATE RENDERER (see plymouth-prep.sh): the guest modprobes a second
+# DRM driver ~6s into the hold, so a renderer attaches while plymouthd is still
+# running -- the post-switch-root event that produced the worst bug this theme
+# has had. The gpu1 frames are named boot-late-* so the post-unlock "no pill"
+# assertion covers them with the rest, while still saying where they came from.
 for i in range(18):
     time.sleep(1.4)
     shot("boot-%02d" % i)
+    if i in (6, 10, 14):
+        shot("boot-late-%02d" % i, "gpu1")
+
+# NOTE on the road not taken: qemu CANNOT hotplug a display device
+# ("Device 'virtio-gpu-pci' does not support hotplugging"), so the late renderer
+# is made by loading its DRIVER late against a device present from the start.
+# That is also the more faithful model -- on the real box the GPU was never
+# absent, only its module was late.
 
 # 4) settle
 readuntil(r"login:", 40)

@@ -100,6 +100,15 @@ line, no callback fired and the cause is a stale framebuffer re-blit on the
 modeset instead -- which no theme can fix, and which needs the GPU driver in
 the initramfs (early-KMS, today xe-only).
 
+VERIFIED 2026-09-11, both ways round. On HARDWARE: two manifestor reboots with
+zero parser errors, the replay window genuinely exercised (nvidia-drm took fb0
+at 30.6s, splash up until 34.8s), and no pill reported. In the VM: the harness
+now MAKES a renderer attach late (a second DRM device whose driver is loaded
+under the running splash, see test/vm/README.md), plymouth adopted it, and the
+splash it drew on that renderer carries no prompt. The assertion was also
+negative-controlled -- dropping a pill frame into the post-unlock set fails it,
+naming the frame -- so it is a test that can actually fail, not a green light.
+
 ### VM-verified (2026-09-04), and what the run taught
 
 Both modes rendered and behaved correctly under tackup's

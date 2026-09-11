@@ -132,6 +132,7 @@ qemu-system-x86_64 -enable-kvm -m 2048 -smp 2 \
   -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
   -vga none \
   -device virtio-gpu-pci,id=gpu0,edid=on,xres="$CAP_XRES",yres="$CAP_YRES" \
+  -device bochs-display,id=gpu1 \
   -display none \
   -chardev socket,id=s0,path="$CSOCK",server=on,wait=off -serial chardev:s0 \
   -monitor unix:"$CMON",server,nowait \

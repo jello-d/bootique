@@ -29,6 +29,35 @@ install, so it is run by hand, not on every change.
   from a screenshot tool into a pass/fail test.
 - `vmexpect` -- a generic expect-over-serial-socket driver.
 
+## The late renderer
+
+The capture VM carries a SECOND display device (`bochs-display`) whose driver is
+held back by a modprobe.d blacklist and loaded by `late-renderer.service` a few
+seconds into the splash hold. That reproduces the event this harness was
+otherwise blind to, and it is the event behind the worst bug the theme has had:
+a DRM device appearing while plymouthd is ALREADY RUNNING, after the unlock, so
+plymouth attaches a new renderer and replays its password state onto it.
+
+What is late is the DRIVER, not the hardware -- which is the faithful model,
+since on the real box the GPU was never absent, only its module was late. It is
+done this way because qemu refuses to hotplug a display device at all
+(`Device 'virtio-gpu-pci' does not support hotplugging`).
+
+The gpu1 frames are named `boot-late-*` so the post-unlock "no pill" assertion
+covers them with the rest. `plymouth-verify.py` reports whether plymouth
+actually ADOPTED the renderer, because a run where it did not has not tested the
+replay path however green the rest of the output looks -- and a blank frame
+would otherwise bank a free pass on the one assertion that matters most.
+
+KNOWN, and visible in the `boot-late-*` frames: the second display renders at
+its own size (1280x800) while the layout was computed for the primary
+(1440x900), so the boot-log scroll sits partly off its left edge. A `script`
+theme has ONE coordinate space and plymouth draws every sprite to every
+renderer, so a two-display guest of MIXED sizes cannot have both right. It is
+not known to affect the fleet (one GPU driving several outputs is a different
+case) and is not asserted on; treat these frames as evidence about the PROMPT,
+not about scroll placement.
+
 ## Initramfs generator: `PLYVM_INITRD`
 
 `initramfs-tools` (the default) is the path this harness verifies today, and it

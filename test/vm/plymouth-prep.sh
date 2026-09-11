@@ -66,6 +66,37 @@ WantedBy=multi-user.target
 U
 systemctl enable plyhold.service
 
+# --- the LATE RENDERER ---------------------------------------------------
+# Reproduce the one event this harness was blind to: a DRM device appearing
+# while plymouthd is ALREADY RUNNING, after the unlock. On a discrete-GPU box
+# the display driver loads after switch-root, plymouth attaches the new
+# renderer and REPLAYS its password state onto it -- which the theme once read
+# as a second password attempt and captioned "incorrect passphrase" over a boot
+# that had already succeeded.
+#
+# The capture VM carries a SECOND display device (bochs-display) for this. What
+# is late is the DRIVER, not the hardware, which is exactly the real case: the
+# GPU was always in the machine, its module just loaded late. A plain
+# modprobe.d blacklist is the right lever -- it suppresses the udev ALIAS
+# auto-load (including inside the initramfs) while leaving an explicit
+# `modprobe bochs` working, so the load happens when this unit says so and not
+# a moment earlier.
+printf 'blacklist bochs\n' > /etc/modprobe.d/vmtest-late-renderer.conf
+
+cat > /etc/systemd/system/late-renderer.service <<'U'
+[Unit]
+Description=attach a second DRM device late, under the running splash
+After=plymouth-start.service
+Before=plymouth-quit.service plymouth-quit-wait.service
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'sleep 6; modprobe bochs; sleep 2; \
+  { echo LATE_RENDERER_DRI: $(ls /dev/dri 2>&1); } > /dev/ttyS0 2>&1 || true'
+[Install]
+WantedBy=multi-user.target
+U
+systemctl enable late-renderer.service
+
 INITRD=$(cat /mnt/h/initrd-mode 2>/dev/null || echo initramfs-tools)
 echo "PLYPREP_INITRD=$INITRD"
 if [ "$INITRD" = dracut ]; then
