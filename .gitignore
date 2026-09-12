@@ -5,3 +5,5 @@ CLAUDE.md
 *~
 __pycache__/
 *.pyc
+CLAUDE.local.md
+.claude/
