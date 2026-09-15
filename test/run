@@ -23,6 +23,12 @@ done
 # SKIPPED, loudly, when shellcheck is absent: a linter that silently does not
 # run is worse than no linter, because the suite still prints success.
 if command -v shellcheck >/dev/null 2>&1; then
+  # Run from the REPO ROOT. `# shellcheck source=` is resolved relative to the
+  # working directory, so linting from anywhere else made shellcheck unable to
+  # follow test/lib.sh and fail the gate -- and `setup.sh test` runs this from
+  # WHEREVER the caller stood, so the suite passed from the repo and failed
+  # from anywhere else. Caught by running it over ssh from $HOME.
+  cd "$REPO" || exit 1
   # -x so a sourced helper (test/lib.sh) is followed rather than warned about.
   # The glob is expanded HERE, in command position: building the list in a
   # variable leaves `*.t` literal, so the tests would have gone unlinted while
