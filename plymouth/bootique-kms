@@ -12,6 +12,7 @@ set -e
 case "${1:-}" in
   prereqs) echo ""; exit 0 ;;
 esac
+# shellcheck disable=SC1091  # provided by initramfs-tools ON the box, not here
 . /usr/share/initramfs-tools/hook-functions
 
 # Only when the running GPU is bound to xe (skip nvidia/i915/other boxes).

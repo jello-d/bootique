@@ -25,8 +25,11 @@ set -eu
 
 PKG=bootique
 VERSION=0.1.0
+# shellcheck disable=SC1007  # `CDPATH= cd` is the idiom that neutralises a
+# set CDPATH for ONE command, not a botched assignment.
 _root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 RC=0
+# shellcheck disable=SC1007  # two flags cleared on one line, deliberately.
 NEED_GRUB= NEED_INITRAMFS=
 
 # marker contract: plain [OK]/[FAIL]/[WARN] an integrator styles in its palette;
@@ -38,6 +41,61 @@ else _G=; _R=; _Y=; _O=; fi
 ok()   { printf '  %s[OK]%s   %s\n' "$_G" "$_O" "$1"; }
 bad()  { printf '  %s[FAIL]%s %s\n' "$_R" "$_O" "$1"; RC=1; }
 warn() { printf '  %s[WARN]%s %s\n' "$_Y" "$_O" "$1"; }
+
+# The identity that must own anything root reads. Overridable ONLY so the
+# in-repo test can drive these checks as an ordinary user in a scratch tree;
+# on a real box it is root and nothing sets it.
+BS_OWNER=${BS_OWNER:-root}
+
+# _own_ok <path> <label>: a file root SOURCES or EXECUTES must be root-owned and
+# not writable by anyone else. A privilege boundary, not tidiness: plymouthd
+# interprets bootique.script AS ROOT (in the initramfs, then again after
+# switch-root), dracut SOURCES the KMS drop-in as shell, and grub-mkconfig
+# sources the grub drop-in -- so a user-writable copy of any of them is
+# arbitrary code in a root context at boot or at image-build time. install
+# already writes them root-owned 0644; nothing asserted they STAYED that way,
+# which is precisely the asserted-vs-actual gap a check exists to close.
+# A missing file is not reported here: the content check above already did.
+_own_ok() {
+  [ -e "$1" ] || return 0
+  # Read the owner and COMPARE, rather than asking find to match it: `find
+  # ! -user <name>` errors out on a name the system does not know and prints
+  # nothing, so an unknown owner read as "no problem found" and the check
+  # passed having looked at nothing. A check that cannot evaluate its own
+  # condition must say so, never report clean.
+  _u=$(stat -c %U "$1" 2>/dev/null) || _u=
+  if [ -z "$_u" ]; then
+    warn "$2: ownership not readable here; NOT checked"
+    return 0
+  fi
+  if [ "$_u" != "$BS_OWNER" ]; then
+    bad "$2 is owned by $_u, not $BS_OWNER -- root reads this file"
+    return 0
+  fi
+  if [ -n "$(find "$1" -maxdepth 0 \
+             \( -perm -0020 -o -perm -0002 \) 2>/dev/null)" ]; then
+    bad "$2 is group- or world-writable -- root reads this file"
+    return 0
+  fi
+  ok "$2 owned by $BS_OWNER, not writable by others"
+}
+
+# _stale_ok <built> <input> <built-label> <input-label>: does the artifact that
+# actually RUNS still derive from this input? The content checks above compare
+# the installed copy against the repo, which says nothing about whether the
+# GENERATED thing (grub.cfg, the initramfs) was rebuilt afterwards. A WARN, not
+# a failure: mtime is a proxy, a `touch` would trip it, and a btrfs rollback of
+# /boot produces it legitimately. For a definitive answer read the input back
+# out of the image (`lsinitrd -f`), which needs root and so cannot live in a
+# check that must stay sudo-free.
+_stale_ok() {
+  [ -e "$1" ] && [ -e "$2" ] || return 0
+  if [ "$2" -nt "$1" ]; then
+    warn "$4 is NEWER than $3; the running $3 predates it (re-run install)"
+  else
+    ok "$3 is newer than the $4 it was built from"
+  fi
+}
 
 # The shared photo: the grub theme's desktop-image AND the plymouth background.
 _bg_src="$_root/background.png"
@@ -200,10 +258,20 @@ grub_install() {
   manage_quiet_boot
 }
 
+# _same <src> <dst> <ok-msg> <bad-msg>: the content verdict for one installed
+# file. Written as if/then/else, NOT `cmp && ok || bad`: in that form a failing
+# `ok` also runs `bad`, so one audit line could print BOTH verdicts and set the
+# drift flag. ok/bad are printf wrappers that return 0 in practice, so this was
+# never live -- but it was twelve shellcheck warnings in the one function whose
+# job is to be trusted, and warnings that are always benign are how a real one
+# goes unread.
+_same() {
+  if cmp -s "$1" "$2" 2>/dev/null; then ok "$3"; else bad "$4"; fi
+}
+
 grub_check() {
-  cmp -s "$_bg_src" "$GRUB_BG_DST" 2>/dev/null \
-    && ok "grub background installed" \
-    || bad "grub background missing or stale (install)"
+  _same "$_bg_src" "$GRUB_BG_DST" "grub background installed" \
+    "grub background missing or stale (install)"
   while read -r _base _ttf _wt _sz; do
     [ -n "$_base" ] || continue
     if _font_ok "$GRUB_ASSETDIR/$_base" "$_wt" "$_sz"; then
@@ -212,19 +280,21 @@ grub_check() {
   done <<EOF
 $(_fonts)
 EOF
-  _bar_ok && ok "grub selection bar ($GRUB_SELECT_BG)" \
-    || bad "grub selection bar missing or wrong colour (install)"
-  _frame_ok && ok "grub menu frame ($GRUB_FRAME_BG/${GRUB_FRAME_PX}px)" \
-    || bad "grub menu frame missing or wrong spec (install)"
-  cmp -s "$_gtheme_src" "$GRUB_THEME_DST" 2>/dev/null \
-    && ok "grub theme current" || bad "grub theme missing or stale (install)"
-  cmp -s "$_gdropin_src" "$GRUB_DROPIN_DST" 2>/dev/null \
-    && ok "grub theme drop-in current (GRUB_THEME set)" \
-    || bad "grub theme drop-in missing or stale (install)"
+  if _bar_ok; then ok "grub selection bar ($GRUB_SELECT_BG)"
+  else bad "grub selection bar missing or wrong colour (install)"; fi
+  if _frame_ok; then ok "grub menu frame ($GRUB_FRAME_BG/${GRUB_FRAME_PX}px)"
+  else bad "grub menu frame missing or wrong spec (install)"; fi
+  _same "$_gtheme_src" "$GRUB_THEME_DST" "grub theme current" \
+    "grub theme missing or stale (install)"
+  _same "$_gdropin_src" "$GRUB_DROPIN_DST" \
+    "grub theme drop-in current (GRUB_THEME set)" \
+    "grub theme drop-in missing or stale (install)"
   if [ ! -f "$GRUB_10LINUX" ]; then ok "10_linux absent; quiet_boot n/a"
   elif grep -q '^quiet_boot="0"' "$GRUB_10LINUX"; then
     ok "post-selection loading messages on (quiet_boot=0)"
   else bad "post-selection loading messages suppressed (install)"; fi
+  _own_ok "$GRUB_DROPIN_DST" "grub theme drop-in"
+  _stale_ok "$GRUB_CFG" "$GRUB_DROPIN_DST" "grub.cfg" "grub theme drop-in"
   return 0
 }
 
@@ -309,6 +379,7 @@ _alt_is_bootique() {
 # question is safe here because both misreadings are now harmless: the pill is
 # live and typeable in either mode, so the whole cost of guessing wrong is one
 # wrong line of hint copy. The file override covers the rest.
+# shellcheck disable=SC1007  # two values cleared on one line, deliberately.
 _MODE= _MODE_WHY=
 _load_mode() {
   case "$BS_UNLOCK_MODE" in
@@ -480,38 +551,61 @@ plymouth_check() {
   ok "unlock prompt mode: $_MODE ($_MODE_WHY)"
   _st=$(mktemp)
   _gen_script "$_st"
-  cmp -s "$_st" "$BS_THEMEDIR/bootique.script" 2>/dev/null \
-    && ok "plymouth theme bootique.script current ($_MODE unlock)" \
-    || bad "plymouth theme bootique.script stale or wrong unlock mode \
-(install)"
+  _same "$_st" "$BS_THEMEDIR/bootique.script" \
+    "plymouth theme bootique.script current ($_MODE unlock)" \
+    "plymouth theme bootique.script stale or wrong unlock mode (install)"
   rm -f "$_st"
   while read -r _name _srcpath; do
     [ -n "$_name" ] || continue
-    cmp -s "$_srcpath" "$BS_THEMEDIR/$_name" 2>/dev/null \
-      && ok "plymouth theme $_name current" \
-      || bad "plymouth theme $_name missing or stale (install)"
+    _same "$_srcpath" "$BS_THEMEDIR/$_name" "plymouth theme $_name current" \
+      "plymouth theme $_name missing or stale (install)"
   done <<EOF
 $(_theme_files)
 EOF
-  _alt_is_bootique && ok "default.plymouth -> bootique" \
-    || bad "default.plymouth not set to bootique (install)"
-  grep -qE 'GRUB_CMDLINE_LINUX_DEFAULT=.*splash' "$BS_DROPIN" 2>/dev/null \
-    && ok "splash cmdline drop-in enables splash" \
-    || bad "splash cmdline drop-in missing or not enabling splash (install)"
+  if _alt_is_bootique; then ok "default.plymouth -> bootique"
+  else bad "default.plymouth not set to bootique (install)"; fi
+  if grep -qE 'GRUB_CMDLINE_LINUX_DEFAULT=.*splash' "$BS_DROPIN" 2>/dev/null
+  then ok "splash cmdline drop-in enables splash"
+  else bad "splash cmdline drop-in missing or not enabling splash (install)"; fi
   if _uses_dracut; then
     if [ "$(_gpu_driver)" = xe ]; then
-      grep -qE 'force_drivers.*\bxe\b' "$BS_DRACUT_CONF" 2>/dev/null \
-        && ok "dracut early-KMS conf forces xe" \
-        || bad "dracut early-KMS conf missing or not forcing xe (install)"
+      if grep -qE 'force_drivers.*\bxe\b' "$BS_DRACUT_CONF" 2>/dev/null
+      then ok "dracut early-KMS conf forces xe"
+      else bad "dracut early-KMS conf missing or not forcing xe (install)"; fi
       if [ -e "$BS_HOOK_DST" ]; then
         bad "stale initramfs-tools hook on a dracut box (install)"; fi
     else ok "early-KMS not applicable (GPU is not xe)"; fi
   else
-    cmp -s "$_hook_src" "$BS_HOOK_DST" 2>/dev/null \
-      && ok "early-KMS initramfs hook current" \
-      || bad "early-KMS initramfs hook missing or stale (install)"
+    _same "$_hook_src" "$BS_HOOK_DST" "early-KMS initramfs hook current" \
+      "early-KMS initramfs hook missing or stale (install)"
   fi
+  # Everything root reads: the theme plymouthd interprets as root, the splash
+  # cmdline drop-in grub-mkconfig sources, and whichever early-KMS mechanism
+  # this box uses (the dracut conf is SOURCED as shell; the hook is EXECUTED).
+  _own_ok "$BS_THEMEDIR/bootique.script" "plymouth theme script"
+  _own_ok "$BS_DROPIN" "splash cmdline drop-in"
+  if _uses_dracut; then _own_ok "$BS_DRACUT_CONF" "dracut early-KMS conf"
+  else _own_ok "$BS_HOOK_DST" "early-KMS initramfs hook"; fi
+  _initrd_fresh
   return 0
+}
+
+# _initrd_fresh: the splash that actually runs at the LUKS prompt is the copy
+# BAKED INTO THE INITRAMFS, not the one on disk -- so every content check above
+# can pass while the boot still shows the previous theme. install rebuilds on
+# any change, so a stale image means something went wrong after it: a failed
+# regen, a hand-edited theme, or a /boot rolled back by a snapshot (this fleet
+# runs grub-btrfs, which makes that a real path rather than a hypothetical).
+# Compares mtimes, which needs no root -- /boot is traversable even though the
+# image itself is 0600.
+_initrd_fresh() {
+  _img=$(_initrd_img) || return 0
+  _newest=$BS_THEMEDIR/bootique.script
+  for _f in "$BS_THEMEDIR"/* "$BS_DRACUT_CONF" "$BS_HOOK_DST"; do
+    [ -e "$_f" ] || continue
+    [ "$_f" -nt "$_newest" ] && _newest=$_f
+  done
+  _stale_ok "$_img" "$_newest" "initramfs" "installed theme/early-KMS"
 }
 
 # =========================== shared regen + dispatch ========================
@@ -534,6 +628,8 @@ COMPOSITION_LOST=
 # kernel's = the NEWEST installed, not `uname -r` (targeting the running kernel
 # is the classic mismatch trap).
 _initrd_img() {
+  # shellcheck disable=SC2012  # kernel filenames carry no spaces or newlines,
+  # and `sort -V` over `ls` is what picks the NEWEST version here.
   _k=$(ls "$BS_INITRD_DIR"/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' \
        | sort -V | tail -1)
   [ -n "$_k" ] || return 1

@@ -1,11 +1,44 @@
 #!/bin/sh
-# test/run - run every bootique in-repo test (*.t). Non-zero if any fails.
+# test/run - run every bootique in-repo test (*.t), then lint every shell file.
+# Non-zero if anything fails. No root, nothing on the box is touched.
 set -eu
+# shellcheck disable=SC1007  # `CDPATH= cd` neutralises a set CDPATH for ONE
+# command; it is not a botched assignment.
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck disable=SC1007  # same `CDPATH= cd` idiom as above.
+REPO=$(CDPATH= cd -- "$HERE/.." && pwd)
 _fail=0
 for _t in "$HERE"/*.t; do
   [ -e "$_t" ] || continue
   sh "$_t" || _fail=1
 done
-[ "$_fail" = 0 ] && echo "all bootique tests passed" \
-  || { echo "bootique: TESTS FAILED" >&2; exit 1; }
+
+# --- lint ---------------------------------------------------------------
+# Gated HERE rather than left to whoever remembers to run it. The file was
+# carrying 19 warnings, all benign, which is precisely how a real one goes
+# unread: nobody scans a list that is always noise. It is clean now, so any
+# new warning is signal. Every deliberate exception carries an inline
+# `# shellcheck disable=` with its reason.
+#
+# SKIPPED, loudly, when shellcheck is absent: a linter that silently does not
+# run is worse than no linter, because the suite still prints success.
+if command -v shellcheck >/dev/null 2>&1; then
+  # -x so a sourced helper (test/lib.sh) is followed rather than warned about.
+  # The glob is expanded HERE, in command position: building the list in a
+  # variable leaves `*.t` literal, so the tests would have gone unlinted while
+  # the gate still reported clean.
+  if shellcheck -x "$REPO/setup.sh" "$HERE/run" "$HERE"/*.t \
+       "$REPO/plymouth/bootique-kms" "$REPO/.githooks/pre-commit"; then
+    echo "  ok   shellcheck clean"
+  else
+    echo "  FAIL shellcheck" >&2; _fail=1
+  fi
+else
+  echo "  SKIP shellcheck not installed (lint NOT run)" >&2
+fi
+
+if [ "$_fail" = 0 ]; then
+  echo "all bootique tests passed"
+else
+  echo "bootique: TESTS FAILED" >&2; exit 1
+fi

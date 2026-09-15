@@ -12,6 +12,7 @@
 # shapes behave; uninstall removes the drop-ins + theme dirs. Reads the repo's
 # own theme sources; nothing on the box is touched.
 set -eu
+# shellcheck source=test/lib.sh
 . "$(dirname "$0")/lib.sh"
 harness_init setup
 
@@ -128,6 +129,7 @@ chmod +x "$T/sbin"/*
 # HOST running the suite happens to have clevis: the detector looks for
 # BS_CLEVIS_BIN on PATH (a name nothing provides, until a test plants a stub)
 # and for a *clevis* dir under BS_DRACUT_MODDIR (an empty scratch dir here).
+OWNER=
 USES_DRACUT=1; GPU=xe
 UMODE=auto; CLEVIS_BIN=absent-clevis; MODEFILE=$T/etc/bootique/unlock-mode
 # Which initramfs lister the guard may find. Both are pinned so the host's real
@@ -145,6 +147,7 @@ run() {
     GRUB_TTF_REG="$TTF_REG" GRUB_TTF_BOLD="$TTF_BOLD" GRUB_10LINUX="$L10" \
     GRUB_CFG="$T/boot/grub/grub.cfg" \
     BS_THEMEDIR="$BTD" BS_DROPIN="$BDROP" BS_GFXMODE="1440x900" \
+    BS_OWNER="${OWNER:-$(id -un)}" \
     BS_USES_DRACUT="$USES_DRACUT" BS_GPU_DRIVER="$GPU" \
     BS_DRACUT_CONF="$DCONF" BS_FW_ROOT="$FWROOT" BS_HOOK_DST="$HOOK" \
     sh "$HERE/setup.sh" "$@"
@@ -317,6 +320,42 @@ run install >/dev/null 2>&1 || fail "install (non-xe GPU) non-zero"
 [ -e "$HOOK" ] && fail "initramfs-tools hook must be absent for a non-xe GPU"
 run check >/dev/null 2>&1 || fail "check drifted for a non-xe GPU"
 GPU=xe; run install >/dev/null 2>&1
+
+# --- root-input OWNERSHIP + MODE ---------------------------------------------
+# plymouthd INTERPRETS bootique.script as root, dracut SOURCES the KMS conf as
+# shell, grub-mkconfig sources the grub drop-in. A copy of any of them that
+# someone else can write is arbitrary code in a root context at boot or at
+# image-build time. install writes them root-owned; nothing asserted they STAYED
+# that way until now.
+chmod g+w "$BTD/bootique.script"
+run check >/dev/null 2>&1 && fail "check passed with a group-writable theme"
+run check 2>&1 | grep -q 'group- or world-writable' \
+  || fail "check did not name the writable theme script"
+chmod g-w "$BTD/bootique.script"
+run check >/dev/null 2>&1 || fail "check still dirty after fixing the mode"
+chmod o+w "$BDROP"
+run check >/dev/null 2>&1 && fail "check passed with a world-writable drop-in"
+chmod o-w "$BDROP"
+# a file owned by someone ELSE than the expected identity
+OWNER=nobody-at-all
+run check >/dev/null 2>&1 && fail "check passed with every root input mis-owned"
+run check 2>&1 | grep -q 'not nobody-at-all' \
+  || fail "check did not flag a file owned by the wrong identity"
+OWNER=
+run check >/dev/null 2>&1 || fail "check dirty after the ownership probe"
+
+# --- the initramfs must be NEWER than what it was built from -----------------
+# The splash that actually runs at the LUKS prompt is the copy baked INTO the
+# initramfs. Every content check can pass while the boot still shows the
+# previous theme -- a failed regen, a hand-edited theme, or a /boot rolled back
+# by a snapshot. A WARN, not a failure: mtime is a proxy.
+touch "$BTD/bootique.script"
+run check 2>&1 | grep -q 'NEWER than' \
+  || fail "a theme newer than the initramfs was not reported"
+run check >/dev/null 2>&1 || fail "a stale initramfs must WARN, not fail"
+touch "$T/boot/initrd.img-6.8.0-31-generic"
+run check 2>&1 | grep -q 'NEWER than' \
+  && fail "still reported stale after the initramfs was rebuilt"
 
 # --- uninstall: drop-ins + theme dirs gone -----------------------------------
 run uninstall >/dev/null 2>&1 || fail "uninstall exited non-zero"
