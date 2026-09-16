@@ -32,7 +32,11 @@ then regenerate the initramfs and grub.cfg as needed.
 .TP
 .B uninstall
 Remove the drop-ins and both theme dirs and regenerate, reverting to a plain
-boot.
+boot. It also puts back the one file bootique edits that it does not own,
+.IR /etc/grub.d/10_linux ,
+but only if a stamp records that bootique made that edit: where the setting was
+already what bootique wants, it cannot tell its own change from a pre-existing
+preference, and leaves it alone.
 .TP
 .B check
 Audit every managed piece; emit [OK]/[FAIL]/[WARN] markers and a non-zero exit

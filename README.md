@@ -38,6 +38,11 @@ sudo for the system installs. Each missing dependency degrades with a note:
 the DejaVu Sans Mono TTFs, and Plymouth. A box without GRUB or without Plymouth
 simply skips that half.
 
+`uninstall` removes everything it placed. It also reverts the one file bootique
+edits but does not own (`/etc/grub.d/10_linux`), and *only* where a stamp
+records that the edit was bootique's — where the setting already matched, it
+cannot tell its own change from your preference, so it leaves it alone.
+
 Tunables are environment variables read by `setup.sh` (font sizes, the selection
 and frame colours, and every system path — the last so the test can drive it
 against a scratch tree).

@@ -122,6 +122,8 @@ GRUB_BG_DST=${GRUB_BG_DST:-$GRUB_ASSETDIR/background.png}
 GRUB_THEME_DST=${GRUB_THEME_DST:-$GRUB_ASSETDIR/theme.txt}
 GRUB_SELECT_STAMP=${GRUB_SELECT_STAMP:-$GRUB_ASSETDIR/.sel.bg}
 GRUB_FRAME_STAMP=${GRUB_FRAME_STAMP:-$GRUB_ASSETDIR/.frame.spec}
+# Records that WE flipped quiet_boot, so uninstall reverts only its own edit.
+GRUB_QB_STAMP=${GRUB_QB_STAMP:-$GRUB_ASSETDIR/.quiet_boot}
 GRUB_DROPIN_DST=${GRUB_DROPIN_DST:-/etc/default/grub.d/bootique.cfg}
 GRUB_CFG=${GRUB_CFG:-/boot/grub/grub.cfg}
 GRUB_MKCONFIG=${GRUB_MKCONFIG:-grub-mkconfig}
@@ -244,8 +246,30 @@ manage_quiet_boot() {
     || { echo "$PKG: quiet_boot line not found in 10_linux; skipping"
          return 0; }
   sudo sed -i 's/^quiet_boot="1"/quiet_boot="0"/' "$GRUB_10LINUX"
+  # Stamp the fact that WE flipped it. Without this, uninstall cannot tell a
+  # value bootique set from one that was already there, and would either strand
+  # the edit or clobber a pre-existing preference; the branch above returns
+  # early on an already-0 file, so "it is 0" proves nothing about who did it.
+  printf '%s\n' "$GRUB_10LINUX" | sudo tee "$GRUB_QB_STAMP" >/dev/null
   echo "$PKG: enabled post-selection loading messages (quiet_boot=0)"
   NEED_GRUB=1
+}
+
+# revert_quiet_boot: put back the ONE file bootique edits that it does not own.
+# Everything else it installs lives under its own paths and is simply removed,
+# so this is the only change that could outlive an uninstall -- and it is in a
+# DISTRO-MANAGED file, which makes "uninstalled (reverts to a plain boot)" a
+# false claim while it stands. Reverts ONLY against the stamp: no stamp means
+# either we never flipped it or the install predates the stamp, and in both
+# cases the conservative answer is to leave a file we cannot prove we changed.
+revert_quiet_boot() {
+  [ -f "$GRUB_QB_STAMP" ] || return 0
+  [ -f "$GRUB_10LINUX" ] || return 0
+  if grep -q '^quiet_boot="0"' "$GRUB_10LINUX"; then
+    sudo sed -i 's/^quiet_boot="0"/quiet_boot="1"/' "$GRUB_10LINUX"
+    echo "$PKG: restored quiet_boot=1 in $GRUB_10LINUX"
+    NEED_GRUB=1
+  fi
 }
 
 grub_install() {
@@ -720,6 +744,7 @@ do_uninstall() {
   for _f in "$GRUB_DROPIN_DST" "$BS_DROPIN" "$BS_DRACUT_CONF" "$BS_HOOK_DST"; do
     [ -e "$_f" ] && { sudo rm -f "$_f"; echo "$PKG: removed $_f"; }
   done
+  revert_quiet_boot
   _has_plymouth && _alt_is_bootique && {
     sudo "$UPDATE_ALTERNATIVES" --remove "$BS_ALT_NAME" "$_alt_target" \
       2>/dev/null || :; echo "$PKG: removed default.plymouth alternative"; }

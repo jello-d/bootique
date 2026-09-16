@@ -130,6 +130,7 @@ chmod +x "$T/sbin"/*
 # BS_CLEVIS_BIN on PATH (a name nothing provides, until a test plants a stub)
 # and for a *clevis* dir under BS_DRACUT_MODDIR (an empty scratch dir here).
 OWNER=
+SCRIPT=
 USES_DRACUT=1; GPU=xe
 UMODE=auto; CLEVIS_BIN=absent-clevis; MODEFILE=$T/etc/bootique/unlock-mode
 # Which initramfs lister the guard may find. Both are pinned so the host's real
@@ -150,7 +151,7 @@ run() {
     BS_OWNER="${OWNER:-$(id -un)}" \
     BS_USES_DRACUT="$USES_DRACUT" BS_GPU_DRIVER="$GPU" \
     BS_DRACUT_CONF="$DCONF" BS_FW_ROOT="$FWROOT" BS_HOOK_DST="$HOOK" \
-    sh "$HERE/setup.sh" "$@"
+    sh "${SCRIPT:-$HERE/setup.sh}" "$@"
 }
 
 # --- install: grub theme + plymouth theme + both regens ----------------------
@@ -363,5 +364,54 @@ run uninstall >/dev/null 2>&1 || fail "uninstall exited non-zero"
 [ -e "$BDROP" ] && fail "splash drop-in not removed on uninstall"
 [ -d "$GAD" ] && fail "grub theme dir not removed on uninstall"
 [ -d "$BTD" ] && fail "plymouth theme dir not removed on uninstall"
+# install EDITS a file it does not own (/etc/grub.d/10_linux, quiet_boot
+# 1 -> 0). It is the only change bootique makes outside its own paths, so
+# it is the one uninstall must put back -- otherwise "uninstalled" leaves a
+# distro-managed file permanently modified and the closing message is false.
+grep -q '^quiet_boot="1"' "$L10" \
+  || fail "uninstall left 10_linux at quiet_boot=0; it edited it, it reverts it"
 
-pass "install + idempotent + check + KMS shapes + uninstall"
+# --- uninstall must NOT revert a quiet_boot it never set ---------------------
+# manage_quiet_boot returns early on an already-0 file, so "it is 0" proves
+# nothing about who made it 0. Only the stamp does. A box that had the messages
+# on before bootique arrived must keep them after bootique leaves.
+printf 'quiet_boot="0"\n' > "$L10"
+run install >/dev/null 2>&1
+[ -e "$GAD/.quiet_boot" ] && fail "stamped a quiet_boot flip it never made"
+run uninstall >/dev/null 2>&1
+grep -q '^quiet_boot="0"' "$L10" \
+  || fail "uninstall clobbered a quiet_boot=0 that bootique never set"
+printf 'quiet_boot="1"\n' > "$L10"
+
+# --- the :rgba recipe tag regenerates PRE-ALPHA slices -----------------------
+# A styled-box slice with no alpha channel renders as NOTHING in gfxmenu, so
+# boxes carrying old-way slices must be upgraded even though colour and size
+# are unchanged. The tag in the stamp is the only thing that can tell.
+run install >/dev/null 2>&1
+printf '%s:%s' '#CBEBA6' '1' > "$GAD/.sel.bg"      # the pre-alpha stamp format
+run check >/dev/null 2>&1 \
+  && fail "check passed on a pre-alpha selection bar"
+run install >/dev/null 2>&1
+grep -q ':rgba$' "$GAD/.sel.bg" || fail "install did not re-stamp the bar"
+printf '%s:%s' '#8A6FD0' '4' > "$GAD/.frame.spec"
+run check >/dev/null 2>&1 && fail "check passed on a pre-alpha menu frame"
+run install >/dev/null 2>&1
+grep -q ':rgba$' "$GAD/.frame.spec" || fail "install did not re-stamp the frame"
+
+# --- a reflowed unlock_mode marker must STOP the install --------------------
+# _gen_script rewrites that ONE line. If it is ever renamed or wrapped, install
+# would otherwise ship the repo default to a box that needs the other mode --
+# silently, which is the whole reason that guard exists.
+mkdir -p "$T/repo/plymouth" "$T/repo/grub"
+cp "$HERE/setup.sh" "$T/repo/"; cp "$HERE/background.png" "$T/repo/"
+cp "$HERE"/plymouth/* "$T/repo/plymouth/"; cp "$HERE"/grub/* "$T/repo/grub/"
+sed -i 's/^unlock_mode = "remote";/unlock_mode =\n  "remote";/' \
+  "$T/repo/plymouth/bootique.script"
+SCRIPT="$T/repo/setup.sh"
+run install >/dev/null 2>&1 && fail "install accepted a theme with no marker"
+run install 2>&1 | grep -q "no 'unlock_mode = ' line" \
+  || fail "install did not name the missing unlock_mode marker"
+SCRIPT=
+run install >/dev/null 2>&1 || fail "install broken after the marker probe"
+
+pass "install + idempotent + check + KMS shapes + revert + uninstall"
