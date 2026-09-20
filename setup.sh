@@ -105,8 +105,37 @@ _bg_src="$_root/background.png"
 # deep-purple menu text, a light-green selection bar, a purple frame near the
 # screen edges, light labels over the dark foliage. Fonts are GENERATED on the
 # box (grub-mkfont from DejaVu Sans Mono), the bar + frame with ImageMagick.
-GRUB_FONT_SIZE=${GRUB_FONT_SIZE:-24}       # menu items
-GRUB_LABEL_SIZE=${GRUB_LABEL_SIZE:-24}     # bottom timeout + help labels
+# --- menu font size: explicit env > persistent file > default ----------------
+# The same precedence, and for the same reason, as BS_UNLOCK_MODE below: a
+# provisioning layer's choice lands in a FILE, never in an env var it must
+# remember to pass. `check` is invoked with a bare environment by integrators,
+# and by more of them than anyone counts -- this package's check is run by its
+# own consumer module, by a human standing in the repo, AND by the pkg
+# machinery's installed-probe. An env-only override is invisible to any caller
+# that does not set it, so the audit compares the live .pf2 against the DEFAULT
+# and reports drift it cannot explain. That happened: fonts correctly
+# regenerated at 32, and the sweep then reported `bootique: uninstalled`.
+#
+# WHY IT IS A PER-BOX FACT AT ALL. GRUB renders at the firmware's preferred
+# (native) mode and these fonts are a fixed PIXEL size, so one size is a
+# different fraction of the screen on every panel: 24px is 0.83% of a 2880-wide
+# framebuffer and 0.63% of a 3840-wide one. Density is irrelevant -- a
+# higher-dpi panel with FEWER pixels shows the LARGER-looking menu. Which size
+# suits a box is a question about its panel, which this package has no business
+# probing; the integrator decides and writes it here.
+GRUB_FONT_FILE=${GRUB_FONT_FILE:-/etc/bootique/font-size}
+_font_file_px() {
+  [ -r "$GRUB_FONT_FILE" ] || return 0
+  _v=$(head -n1 "$GRUB_FONT_FILE" 2>/dev/null | tr -d ' \t\r')
+  # Validated, not trusted: a stray line leaves the default standing rather
+  # than handing grub-mkfont a garbage size.
+  case ${_v:-} in ''|*[!0-9]*) return 0 ;; esac
+  [ "$_v" -ge 8 ] && [ "$_v" -le 128 ] || return 0
+  printf '%s' "$_v"
+}
+_font_px=$(_font_file_px)
+GRUB_FONT_SIZE=${GRUB_FONT_SIZE:-${_font_px:-24}}    # menu items
+GRUB_LABEL_SIZE=${GRUB_LABEL_SIZE:-${_font_px:-24}}  # timeout + help labels
 _dj=/usr/share/fonts/truetype/dejavu
 GRUB_TTF_REG=${GRUB_TTF_REG:-$_dj/DejaVuSansMono.ttf}
 GRUB_TTF_BOLD=${GRUB_TTF_BOLD:-$_dj/DejaVuSansMono-Bold.ttf}

@@ -20,6 +20,10 @@ mkdir -p "$T/sbin" "$T/boot/grub" "$T/etc/default/grub.d" "$T/etc/grub.d" \
   "$T/plymouth-themes"
 # scratch destinations
 GAD=$T/boot/grub/themes/bootique         # grub asset dir
+# Pinned into $T like BS_MODE_FILE, and for the same reason: unpinned, the
+# suite would read the DEVELOPER's /etc/bootique/font-size and a box that had
+# been sized for its panel would fail the 24px assertions below.
+FONTFILE=$T/font-size                    # absent => the built-in 24
 BTD=$T/plymouth-themes/bootique          # plymouth theme dir (parent exists)
 GDROP=$T/etc/default/grub.d/bootique.cfg
 BDROP=$T/etc/default/grub.d/splash.cfg
@@ -146,7 +150,9 @@ run() {
     GRUB_THEME_DST="$GAD/theme.txt" GRUB_DROPIN_DST="$GDROP" \
     GRUB_SELECT_STAMP="$GAD/.sel.bg" GRUB_FRAME_STAMP="$GAD/.frame.spec" \
     GRUB_TTF_REG="$TTF_REG" GRUB_TTF_BOLD="$TTF_BOLD" GRUB_10LINUX="$L10" \
-    GRUB_CFG="$T/boot/grub/grub.cfg" \
+    GRUB_CFG="$T/boot/grub/grub.cfg" GRUB_FONT_FILE="$FONTFILE" \
+    ${GRUB_FONT_SIZE:+GRUB_FONT_SIZE="$GRUB_FONT_SIZE"} \
+    ${GRUB_LABEL_SIZE:+GRUB_LABEL_SIZE="$GRUB_LABEL_SIZE"} \
     BS_THEMEDIR="$BTD" BS_DROPIN="$BDROP" BS_GFXMODE="1440x900" \
     BS_OWNER="${OWNER:-$(id -un)}" \
     BS_USES_DRACUT="$USES_DRACUT" BS_GPU_DRIVER="$GPU" \
@@ -162,6 +168,38 @@ for _f in mono.pf2 mono-bold.pf2 mono-sm.pf2 mono-sm-bold.pf2; do
   [ -f "$GAD/$_f" ] || fail "grub font $_f not generated"
 done
 grep -q 'Bold 24' "$GAD/mono-bold.pf2" || fail "grub bold font wrong name"
+
+# --- the font size comes from a FILE, so a bare-env caller agrees ------------
+# THE BUG THIS PINS: the size was first plumbed as an env var an integrator
+# passed. `check` is run with a bare environment by more callers than anyone
+# counts -- the consumer module, a human in the repo, and the pkg machinery's
+# installed-probe -- so any caller that did not set it compared the live .pf2
+# against the DEFAULT and reported drift it could not explain. On a real box
+# the fonts were correctly regenerated at 32 and the sweep then said
+# `bootique: uninstalled`. Same precedence, and the same reasoning, as
+# BS_MODE_FILE: explicit env > persistent file > default.
+printf '32\n' > "$FONTFILE"
+run install >/dev/null 2>&1 || fail "install failed with a font-size file"
+grep -q 'Regular 32' "$GAD/mono.pf2" \
+  || fail "the font-size file did not reach grub-mkfont"
+grep -q 'Bold 32' "$GAD/mono-bold.pf2" || fail "bold font ignored the file"
+# The whole point: check agrees WITHOUT being handed the size.
+run check >/dev/null 2>&1 || fail "check drifted against the size it installed"
+
+# An explicit env still wins over the file (tests, one-offs).
+GRUB_FONT_SIZE=40 GRUB_LABEL_SIZE=40 run install >/dev/null 2>&1 \
+  || fail "install failed with an explicit size"
+grep -q 'Regular 40' "$GAD/mono.pf2" || fail "env did not override the file"
+
+# Garbage in the file leaves the DEFAULT standing rather than handing
+# grub-mkfont a nonsense size.
+printf 'not-a-number\n' > "$FONTFILE"
+run install >/dev/null 2>&1 || fail "install failed on a garbage font-size"
+grep -q 'Regular 24' "$GAD/mono.pf2" \
+  || fail "a garbage font-size must fall back to the default"
+rm -f "$FONTFILE"
+run install >/dev/null 2>&1 || fail "install failed restoring the default"
+grep -q 'Regular 24' "$GAD/mono.pf2" || fail "no file must mean the default"
 [ -f "$GAD/sel_c.png" ] || fail "grub selection bar not generated"
 [ -f "$GAD/frame_c.png" ] || fail "grub menu frame not generated"
 cmp -s "$HERE/grub/theme.txt" "$GAD/theme.txt" || fail "grub theme not placed"
