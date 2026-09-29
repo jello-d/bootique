@@ -2,9 +2,9 @@
 
 The plymouth splash for the whole post-grub boot: initramfs -> LUKS passphrase
 prompt -> systemd startup -> greetd handoff, styled to match the grub 'bootique'
-menu and the greeter. Deployed + enabled by `modules/boot-splash` (theme files
-here, plus the default.plymouth alternative, a quiet-splash grub.d drop-in, and
-an initramfs rebuild). The naming wall: nothing deployed says tackup.
+menu and the greeter. Placed + enabled by this repo's `setup.sh` (the theme
+files here, plus the default.plymouth alternative, a quiet-splash grub.d
+drop-in, and an initramfs rebuild).
 
 ## Files
 - `bootique.plymouth`  theme manifest (ModuleName=script).
@@ -13,8 +13,9 @@ an initramfs rebuild). The naming wall: nothing deployed says tackup.
                        and the half-res VM preview is faithful.
 - `pill.png`           the rounded light-green prompt pill (alpha PNG, generated
                        at the display aspect so scaling keeps clean corners).
-- background.png is NOT here: the module copies the shared photo from
-  deploy/grub/background.png (single source of truth).
+- background.png is NOT here: it is the repo ROOT's `background.png`, the one
+  photo the grub theme and this splash share (single source of truth), copied
+  in by `setup.sh` at install time.
 
 ## Layout / colour zones
 - green in the MIDDLE: bold "Unlock disk to continue", the pill (dark-green
@@ -111,8 +112,9 @@ naming the frame -- so it is a test that can actually fail, not a green light.
 
 ### VM-verified (2026-09-04), and what the run taught
 
-Both modes rendered and behaved correctly under tackup's
-`test/vm/plymouth-vmcheck` on real DRM. Three findings that were NOT guessable:
+Both modes rendered and behaved correctly under `test/vm/plymouth-vmcheck`
+(which lived in the integrator's repo at the time) on real DRM. Three findings
+that were NOT guessable:
 
 - `SetImage(NULL)` DOES NOT ERASE A SPRITE. Plymouth repaints a sprite's region
   when given a new image, but a NULL one repaints nothing, so the last pixels
@@ -191,13 +193,16 @@ it: the firmware GOP never exposes native to grub.
 
 The fix is to force xe (+ firmware) into the initramfs so native is up BEFORE
 plymouth's first frame. The MECHANISM depends on the initramfs generator, which
-`modules/boot-splash` detects:
+`setup.sh`'s `place_kms` detects:
 - DRACUT (this fleet's btrfs standard -- manifold uses it): a generated drop-in
-  `/etc/dracut.conf.d/90-bootique-kms.conf` with `force_drivers+=" xe "` (dracut
-  turns this into `rd.driver.pre=xe` on the kernel cmdline) + `install_items`
+  `/etc/dracut.conf.d/90-bootique-kms.conf` with `force_drivers+=" xe "`
+  (dracut bakes that into the INITRAMFS's own cmdline, NOT the kernel's -- do
+  not look in /proc/cmdline for `rd.driver.pre=xe` and conclude the fix is
+  missing; look at when the xe firmware loads relative to the LUKS prompt)
+  + `install_items`
   for the firmware xe requests at bind time (DMC + GuC are device-selected, NOT
   in modinfo, so listed explicitly; prefer the on-disk .zst).
-- initramfs-tools (fallback): the self-gating hook deploy/plymouth/bootique-kms
+- initramfs-tools (fallback): the self-gating hook `plymouth/bootique-kms`
   (`force_load xe`). NOTE dracut IGNORES this hook entirely -- it is why the
   first attempt never landed (I built an initramfs-tools hook on a dracut box;
   the btrfs memory's "dracut, NOT initramfs-tools; verify lsinitrd" said so).

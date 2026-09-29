@@ -6,8 +6,7 @@
 # modeset to native strands the background in a corner (the post-unlock resize):
 # on this box xe otherwise loads ~35s in, from the root fs, long after the LUKS
 # prompt. Self-gated on the live GPU actually being bound to xe, so it is an
-# inert no-op on any non-xe box (e.g. an Nvidia workstation). Naming wall:
-# nothing here says tackup.
+# inert no-op on any non-xe box (e.g. an Nvidia workstation).
 set -e
 case "${1:-}" in
   prereqs) echo ""; exit 0 ;;
