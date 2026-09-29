@@ -3,8 +3,27 @@
 # and pass/fail.
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 T=$(mktemp -d)
-trap 'rm -rf "$T"' EXIT
 _tname=test
+_verdict=
 harness_init() { _tname=$1; }
-fail() { printf '  FAIL %s: %s\n' "$_tname" "$1" >&2; exit 1; }
-pass() { printf '  ok   %s\n' "${1:-$_tname}"; }
+fail() { _verdict=fail; printf '  FAIL %s: %s\n' "$_tname" "$1" >&2; exit 1; }
+pass() { _verdict=pass; printf '  ok   %s\n' "${1:-$_tname}"; }
+
+# A test that ENDS WITHOUT A VERDICT is a failure, and must say so. Under
+# `set -eu` any unguarded command that returns non-zero kills the script where
+# it stands: the runner sees the exit code, but the file that died and the
+# reason are never printed, so a real regression reads as a blank line. The
+# same applies to falling off the end with no `pass`. Both are reported here
+# rather than trusted to be noticed.
+_on_exit() {
+  _st=$?
+  rm -rf "$T"
+  [ "$_verdict" = fail ] && exit "$_st"
+  [ "$_verdict" = pass ] && [ "$_st" = 0 ] && exit 0
+  if [ "$_verdict" = pass ]; then _why='died after its own pass'
+  else _why='reached neither pass nor fail'; fi
+  printf '  FAIL %s: ABORTED at exit %s (%s)\n' "$_tname" "$_st" "$_why" >&2
+  [ "$_st" = 0 ] && exit 1
+  exit "$_st"
+}
+trap _on_exit EXIT
