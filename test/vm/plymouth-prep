@@ -168,6 +168,8 @@ if [ "$INITRD" = dracut ]; then
   # no DRM device and a text-mode boot.
   printf 'hostonly=yes\nadd_drivers+=" virtio_gpu virtio_dma_buf "\n' \
     > /etc/dracut.conf.d/90-vmtest.conf
+  # shellcheck disable=SC2012  # a kernel image name never carries a space;
+  # `find` here would buy nothing and cost the sort order.
   KVER=$(ls /boot/vmlinuz-* | sed 's|.*/vmlinuz-||' | sort -V | tail -1)
   dracut --force "/boot/initrd.img-$KVER" "$KVER"
   lsinitrd "/boot/initrd.img-$KVER" | grep -c bootique || true

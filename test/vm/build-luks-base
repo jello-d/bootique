@@ -30,7 +30,6 @@
 # Host-side, NO sudo (qemu+kvm only; the guest is root, which sidesteps a
 # no-TTY sudo shell).
 set -eu
-HERE=$(cd "$(dirname "$0")" && pwd)
 D=${1:-/var/tmp/plyvm}
 SUITE=${PLYVM_SUITE:-noble}
 IMG=$D/$SUITE-server-cloudimg-amd64.img

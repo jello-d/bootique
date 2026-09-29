@@ -29,13 +29,29 @@ if command -v shellcheck >/dev/null 2>&1; then
   # this from WHEREVER the caller stood, so the suite passed from the repo
   # and failed from anywhere else. Caught by running it over ssh from $HOME.
   cd "$REPO" || exit 1
+  # WHAT gets linted is DERIVED, not listed: every tracked file whose shebang
+  # says sh. A hand-kept list is how test/vm's four shell files went unlinted
+  # for months while the gate reported clean -- and how a list built in a
+  # VARIABLE once left `*.t` literal, unlinted and green. `set --` puts the
+  # derived list in command position instead.
+  #
+  # test/harness_lib is NOT in the list, deliberately: it has no shebang, so
+  # linting it alone only draws SC2148 (unknown shell). `-x` below reaches it
+  # in the context that actually loads it, which is the honest way to lint a
+  # sourced file.
+  set --
+  for _f in $(git ls-files); do
+    [ "$(head -c 2 "$_f")" = '#!' ] || continue
+    case "$(head -1 "$_f")" in *python*) continue ;; esac
+    set -- "$@" "$_f"
+  done
+  # A derivation that finds nothing must FAIL, not lint an empty set green.
+  if [ "$#" -lt 8 ]; then
+    echo "  FAIL lint: only $# shell file(s) found (expected 8+)" >&2
+    _fail=1
   # -x so a sourced helper (test/harness_lib) is followed rather than
   # warned about.
-  # The glob is expanded HERE, in command position: building the list in a
-  # variable leaves `*.t` literal, so the tests would have gone unlinted while
-  # the gate still reported clean.
-  if shellcheck -x "$REPO/setup.sh" "$HERE/run" "$HERE"/*.t \
-       "$REPO/plymouth/bootique-kms" "$REPO/.githooks/pre-commit"; then
+  elif shellcheck -x "$@"; then
     echo "  ok   shellcheck clean"
   else
     echo "  FAIL shellcheck" >&2; _fail=1
