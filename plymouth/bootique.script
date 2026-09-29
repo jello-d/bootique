@@ -77,7 +77,7 @@ prompt_shown = 0; cur_bullets = 0;
 #
 # unlock_mode: "remote" where an auto-unlock races the human, "local" where
 # typing is the only way in (no racing state, no track, and no boot ever claims
-# to be auto-unlocking -- a local box must never make that false promise).
+# to be auto-unlocking, and a local box must never make that false promise).
 # GENERATED: setup.sh rewrites the assignment below at install time, so keep it
 # on ONE line in exactly this shape.
 unlock_mode = "remote";
@@ -131,7 +131,7 @@ for (i = 0; i < dot_max; i++) {
   dot_pool[i].SetOpacity(0);
 }
 # The auto-unlock track: one sprite per racing second. SPRITES, not a text
-# progress bar -- a proportional font gives its glyphs different advance
+# progress bar, because a proportional font gives its glyphs different advance
 # widths, so a text bar visibly JITTERS as it fills, and a block-drawing glyph
 # may not even be in the font set plymouth carries into the initramfs. dot.png
 # is already a theme asset and scales cleanly.
@@ -260,8 +260,8 @@ fun draw_track() {
   secs.SetOpacity(1);
 }
 
-# draw_state: the ENTIRE state readout -- headline, the auto-unlock track, the
-# "or type" label and the amber line under the pill -- in one function, so the
+# draw_state: the ENTIRE state readout (headline, the auto-unlock track, the
+# "or type" label and the amber line under the pill) in one function, so the
 # four elements can never contradict each other. Priority: a refused answer
 # first (the most actionable thing on screen), then a live auto-unlock, then
 # "it is on you". In local mode race_over starts set, so this collapses to one
@@ -306,7 +306,7 @@ fun draw_state() {
   }
 }
 
-# draw_prompt: the LUKS unlock prompt at current geometry -- a light-green pill
+# draw_prompt: the LUKS unlock prompt at current geometry: a light-green pill
 # with dark-green passphrase dots, and whatever draw_state decides belongs
 # around it. Called from on_password AND from relayout (so a resize
 # repositions a prompt that is already showing). dots re-take dot_img so a
@@ -417,7 +417,7 @@ Plymouth.SetUpdateStatusFunction(on_status);
 # replays its state to the theme when a late-loading GPU driver brings up a new
 # renderer (nvidia-drm here lands ~2s AFTER switch-root while the splash is
 # still up), and without the latch the theme counted that replay as a SECOND
-# attempt -- putting a pill and "incorrect passphrase" over a boot that had
+# attempt, since putting a pill and "incorrect passphrase" over a boot that had
 # already succeeded. It is NOTED in the boot log rather than swallowed: if a
 # pill ever appears after the unlock WITHOUT that line, no callback fired and
 # the cause is a stale framebuffer re-blit instead, which only early-KMS (the
@@ -511,7 +511,7 @@ fun on_refresh() {
     # The track is the RACING state's readout, and a refused passphrase
     # OUTRANKS racing (draw_state hides the track in that case). Without this
     # guard the next pulse would put the track straight back up underneath a
-    # "incorrect passphrase" headline -- two states on screen at once.
+    # "incorrect passphrase" headline, i.e. two states on screen at once.
     if (_redraw == 1 && prompt_shown == 1 && attempt < 2) { draw_track(); }
   }
 }

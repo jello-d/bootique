@@ -8,26 +8,26 @@ install, so it is run by hand, not on every change.
 
 ## Pieces
 
-- `build-luks-base` -- builds the base image the render runs against: boots an
+- `build-luks-base`: builds the base image the render runs against: boots an
   Ubuntu cloud image as an installer and runs `tackdisk install` onto a blank
   disk. `PLYVM_SUITE` picks the release (default `noble`) for both the installer
   image and the debootstrapped suite, so they always match. EXTERNAL DEP:
   `tackdisk` (the day-zero disk installer) lives in a separate checkout; point
   `TACKDISK_REPO` at it (default `$HOME/src/tackup`). This is the one piece that
-  reaches outside bootique -- installing a bootable LUKS OS is the installer's
+  reaches outside bootique, and installing a bootable LUKS OS is the installer's
   job, not the theme's.
-- `plymouth-vmcheck` -- the driver: injects THIS repo's theme (`plymouth/` +
+- `plymouth-vmcheck` is the driver: injects THIS repo's theme (`plymouth/` +
   `background.png`) into an overlay on the base, boots, and screendumps. Reads
   the theme from the repo root by default (override `PLYVM_BOOTIQUE`).
-- `plymouth-prep` -- runs in the guest: installs plymouth, injects the theme,
+- `plymouth-prep` runs in the guest: installs plymouth, injects the theme,
   rebuilds the initramfs.
-- `plymouth-capture` -- drives the boot over the qemu monitor/serial and
+- `plymouth-capture`: drives the boot over the qemu monitor/serial and
   screendumps the key frames, including the racing -> required -> rejected
   unlock states.
-- `plymouth-verify` -- asserts the frames rendered the expected elements
+- `plymouth-verify`: asserts the frames rendered the expected elements
   (background fills every corner; the prompt pill is present); turns the harness
   from a screenshot tool into a pass/fail test.
-- `vmexpect` -- a generic expect-over-serial-socket driver.
+- `vmexpect`: a generic expect-over-serial-socket driver.
 
 ## The late renderer
 
@@ -38,7 +38,7 @@ otherwise blind to, and it is the event behind the worst bug the theme has had:
 a DRM device appearing while plymouthd is ALREADY RUNNING, after the unlock, so
 plymouth attaches a new renderer and replays its password state onto it.
 
-What is late is the DRIVER, not the hardware -- which is the faithful model,
+What is late is the DRIVER, not the hardware, which is the faithful model,
 since on the real box the GPU was never absent, only its module was late. It is
 done this way because qemu refuses to hotplug a display device at all
 (`Device 'virtio-gpu-pci' does not support hotplugging`).
@@ -46,14 +46,14 @@ done this way because qemu refuses to hotplug a display device at all
 The gpu1 frames are named `boot-late-*` so the post-unlock "no pill" assertion
 covers them with the rest. `plymouth-verify` reports whether plymouth
 actually ADOPTED the renderer, because a run where it did not has not tested the
-replay path however green the rest of the output looks -- and a blank frame
+replay path however green the rest of the output looks, and a blank frame
 would otherwise bank a free pass on the one assertion that matters most.
 
 ## Shutdown / reboot
 
 One theme serves boot AND shutdown, branched on `Plymouth.GetMode()`, and the
-`is_off` half -- warp background, centred bright-green scroll, scrim, bold mode
-label -- is nearly half the theme. It used to be checked by hand-editing
+`is_off` half (warp background, centred bright-green scroll, scrim, bold mode
+label) is nearly half the theme. It used to be checked by hand-editing
 `is_off=1` and re-running the BOOT harness, which exercises the layout but never
 the branch that SELECTS it, so the one thing that could not be tested was
 whether a real shutdown picks it at all.
@@ -62,14 +62,15 @@ The capture now ends by pressing the ACPI power button over the qemu monitor
 (no login needed, so it costs no credentials) and screendumping in a tight loop.
 `sdhold.service` holds the splash: a guest with nothing to stop powers off in
 about a second, and the first attempt caught exactly one already-black frame.
-The ordering is the trick -- `plymouth-poweroff.service` runs LATE, so the usual
+The ordering is the trick: `plymouth-poweroff.service` runs LATE, so the usual
 slow-`ExecStop` delay would land while units are still stopping, before the
 shutdown splash exists. sdhold sits in the same late window instead, after the
 splash is up and before the thing that cuts power.
 
 Two assertions: the warp background REPLACED the forest (mean 0.23 against 0.77,
 not a close call), and the bold mode label is on screen. The label is found by
-COUNTING bright-green pixels rather than comparing bands -- on a radial warp the
+COUNTING bright-green pixels rather than comparing bands, because on a radial
+warp the
 background varies enormously across the frame, so a spatial reference measures
 the background rather than the text, which is how the first attempt managed to
 measure noise. Bright-green-pixel fraction separates absolutely: 0.1224 in the
@@ -77,7 +78,7 @@ label band on every frame that drew it, EXACTLY 0.0000 on every control.
 
 Frames that rendered nothing are excluded FIRST. A black frame is dark, so
 "dark means the warp is up" would otherwise be satisfied by a display that had
-already been torn down -- which is precisely what the first run did, reporting a
+already been torn down, which is precisely what the first run did, reporting a
 cheerful pass over a single blank frame.
 
 KNOWN, and visible in the `boot-late-*` frames: the second display renders at

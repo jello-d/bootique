@@ -43,7 +43,8 @@ def green_frac(png, crop):
     # fraction of pixels in crop that are BRIGHT GREEN the way the theme's
     # shutdown label and scroll are (0.20/0.92/0.38). Used instead of a
     # band-vs-band colour comparison where the BACKGROUND itself varies a lot
-    # across the frame -- on the radial warp field, brightness at the centre
+    # across the frame, because on the radial warp field, brightness at the
+    # centre
     # and at the edge have nothing to do with each other, so any spatial
     # reference measures the background, not the text. Requiring green to lead
     # BOTH other channels clearly excludes the warp's cyan rays (g~b) and its
@@ -68,7 +69,7 @@ def region(dims, wf, hf, xf, yf):
 def check(name, cond, detail=""):
     # The measured value is PRINTED alongside every verdict, not just kept for
     # a failure. These are colour deltas a few thousandths wide, so the numbers
-    # are how a threshold gets re-calibrated after a layout change -- without
+    # are how a threshold gets re-calibrated after a layout change, and without
     # them the only way to retune is to re-run and instrument by hand.
     line = ("  PASS " if cond else "  FAIL ") + name
     if detail:
@@ -92,7 +93,7 @@ else:
     # not blank (something rendered, not an all-black screen)
     check("luks: not blank (mean > 0.05)", _fx(luks, "mean") > 0.05)
     # background FILLS the screen: all four corners are non-black. This is the
-    # resize/stranded-bg detector -- a splash shrunk to a corner leaves the
+    # resize/stranded-bg detector: a splash shrunk to a corner leaves the
     # opposite corners black.
     br = _fx(luks, "mean", region(D, 0.12, 0.12, 0.85, 0.85))
     bl = _fx(luks, "mean", region(D, 0.12, 0.12, 0.03, 0.85))
@@ -125,7 +126,7 @@ else:
 
 # --- the LATCH: no prompt may come back after the unlock ----------------------
 # Once the root fs is mounted the theme latches the prompt shut, because
-# plymouth REPLAYS its password state onto a renderer that attaches late -- a
+# plymouth REPLAYS its password state onto a renderer that attaches late, and a
 # discrete GPU whose driver loads after switch-root, with the splash still up --
 # and the theme counted that replay as a second attempt, putting a pill reading
 # "incorrect passphrase" over a boot that had already succeeded.
@@ -138,7 +139,7 @@ else:
 shots = sorted(f for f in os.listdir(OUT)
                if f.startswith("boot-") and f.endswith(".png"))
 # A frame with nothing drawn in it cannot show a pill, so counting it as a pass
-# would be a silent lie -- and the late-renderer frames are exactly where that
+# would be a silent lie, and the late-renderer frames are exactly where that
 # can happen (if plymouth declines to attach the second DRM device, gpu1 stays
 # blank). Split them out and REPORT them instead of quietly banking a green.
 live = [f for f in shots if _fx(f, "mean") >= 0.05]
@@ -185,7 +186,7 @@ else:
 # told apart by WHICH BAND carries text, not by one band changing colour.
 #
 # Every measurement is red-vs-green against the SAME band in the post-unlock
-# frame, where the latch guarantees nothing is drawn -- so the baseline is this
+# frame, where the latch guarantees nothing is drawn, so the baseline is this
 # run's own bare photo rather than a number baked in here. Measured on real
 # frames: the photo scores 0.024, green text 0.014, amber 0.032, i.e. green
 # pulls the band DOWN by ~0.010 and amber pushes it UP by ~0.008.
@@ -217,7 +218,7 @@ else:
     b_trk = rg(boot, trk)
     if MODE == "remote":
         # racing: the auto-unlock headline is UP and green. This is the whole
-        # point of the promoted layout -- a boot that is waiting on the network
+        # point of the promoted layout: a boot that is waiting on the network
         # must SAY so, prominently, not bury it in a line under the pill.
         d = b_net - rg(RACE, net)
         check("prompt: racing shows the green auto-unlock headline",
@@ -232,7 +233,7 @@ else:
         check("prompt: required state states it in amber",
               amber > 0.010, "amber delta %.4f (want > 0.010)" % amber)
         # The TRACK has to be present while racing and GONE once the window
-        # closes -- a progress bar left over a state it no longer describes is
+        # closes: a progress bar left over a state it no longer describes is
         # worse than none.
         tp = b_trk - rg(RACE, trk)
         tg = abs(rg(REQ, trk) - b_trk)
@@ -263,7 +264,7 @@ else:
     else:
         # local mode: nothing races the human here, so the auto-unlock headline
         # must NEVER appear and the state must never escalate. This is the mode
-        # split earning its keep -- a box with no auto-unlock must not make a
+        # split earning its keep: a box with no auto-unlock must not make a
         # promise it cannot keep, in any frame of any boot.
         claim = abs(rg(RACE, net) - b_net)
         check("prompt: local mode never claims to be auto-unlocking",
@@ -275,7 +276,7 @@ else:
     rej = rg(REJ, hnt) - b_hnt
     check("prompt: a refused passphrase switches the hint to amber",
           rej > 0.010, "amber delta %.4f (want > 0.010)" % rej)
-    # And the prompt must be GONE once the disk is open -- in BOTH headline
+    # And the prompt must be GONE once the disk is open, in BOTH headline
     # slots. plymouth leaves a sprite's last pixels on screen when its image is
     # cleared to NULL, which once left the title painted over the whole boot, so
     # a boot that succeeded could still read "incorrect passphrase". Since the
@@ -291,7 +292,7 @@ else:
 # half swaps the forest photo for the warp field, centres the scroll in bright
 # green and puts a bold mode label above it. It had NO automated coverage until
 # now: it was checked by hand-editing is_off=1 and running the BOOT harness,
-# which exercises the LAYOUT but never the branch that selects it -- so the one
+# which exercises the LAYOUT but never the branch that selects it, so the one
 # thing that could not be tested was whether a real shutdown picks it at all.
 #
 # The background is the discriminator and it is not a close call: the warp
@@ -302,7 +303,7 @@ if not sd:
     check("shutdown: frames captured", False)
 else:
     # A BLACK frame is dark, so "dark means the warp is up" would be satisfied
-    # by a display that had already been torn down -- which is exactly what the
+    # by a display that had already been torn down, which is exactly what the
     # first run caught (one frame, mean 0.000, and a cheerful pass). Only frames
     # that actually rendered can answer anything, so they are selected FIRST.
     means = [(f, _fx(f, "mean")) for f in sd]
@@ -321,7 +322,7 @@ else:
         # found by COUNTING bright-green pixels, which separates cleanly where
         # a band comparison did not: measured 0.1224 in this band on every
         # shutdown frame that drew the label, against EXACTLY 0.0000 on every
-        # control -- the boot splash, a boot-scroll frame, and the warp itself
+        # control: the boot splash, a boot-scroll frame, and the warp itself
         # away from the label. Checked across all rendered frames because the
         # earliest ones can predate the label being drawn.
         lab = region(_dims(darkest), 0.24, 0.035, 0.38, 0.3450)

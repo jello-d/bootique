@@ -154,7 +154,7 @@ echo "vmcheck: key shots -> 01-luks-empty.png 02-luks-bullets.png boot-10.png"
 
 # --- gate: capture must have reached its states, frames must verify -----------
 # A capture that never saw the LUKS prompt (rc!=0), or frames that did not
-# render the prompt/bg, is a FAILURE -- not a silently-green run. This is what
+# render the prompt/bg, is a FAILURE, not a silently-green run. This is what
 # turns the harness from a screenshot tool into a repeatable test.
 if [ "$_caprc" -ne 0 ]; then
   echo "vmcheck: FAIL -- capture did not reach its states (rc=$_caprc);" \

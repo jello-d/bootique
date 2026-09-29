@@ -31,7 +31,7 @@ if command -v shellcheck >/dev/null 2>&1; then
   cd "$REPO" || exit 1
   # WHAT gets linted is DERIVED, not listed: every tracked file whose shebang
   # says sh. A hand-kept list is how test/vm's four shell files went unlinted
-  # for months while the gate reported clean -- and how a list built in a
+  # for months while the gate reported clean, and how a list built in a
   # VARIABLE once left `*.t` literal, unlinted and green. `set --` puts the
   # derived list in command position instead.
   #

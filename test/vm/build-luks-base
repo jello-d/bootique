@@ -1,5 +1,5 @@
 #!/bin/sh
-# build-luks-base -- build a clean LUKS+btrfs base image for plymouth-vmcheck to
+# build-luks-base: build a clean LUKS+btrfs base image for plymouth-vmcheck to
 # render the splash against. Boots an Ubuntu cloud image as a headless
 # installer, runs `tackdisk install` onto a blank target disk, and powers off.
 # The result ($SCRATCH/base-<suite>-target.qcow2) is a plain bootable target: a
@@ -22,7 +22,7 @@
 # EXTERNAL DEPENDENCY: the base is installed by `tackdisk`, the day-zero disk
 # installer, which lives in a separate checkout. Point TACKDISK_REPO at it
 # (default $HOME/src/tackup). This is the one piece of the render harness that
-# reaches outside bootique -- building a bootable LUKS OS is the installer's
+# reaches outside bootique, and building a bootable LUKS OS is the installer's
 # job, not the theme's. Override PLYVM_BASE to write the image elsewhere.
 #
 # Prereqs in scratch-dir: <suite>-server-cloudimg-amd64.img, from
@@ -48,7 +48,8 @@ xorriso -as mkisofs -R -J -V INSTALLER -o "$D/base-repo.iso" \
   "$TACKDISK_REPO" >/dev/null 2>&1
 
 # The in-guest installer script (runs as root under cloud-init). Its output is
-# buffered to a file and dumped to ttyS0 at the very end -- writing to serial
+# buffered to a file and dumped to ttyS0 at the very end, because writing to
+# serial
 # live interleaves with boot spam and gets lost.
 cat > "$D/base-run.sh" <<'GUEST'
 #!/bin/sh

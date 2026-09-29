@@ -176,7 +176,7 @@ grep -q 'Bold 24' "$GAD/mono-bold.pf2" || fail "grub bold font wrong name"
 # --- the font size comes from a FILE, so a bare-env caller agrees ------------
 # THE BUG THIS PINS: the size was first plumbed as an env var an integrator
 # passed. `check` is run with a bare environment by more callers than anyone
-# counts -- the consumer module, a human in the repo, and the pkg machinery's
+# counts: the consumer module, a human in the repo, and the pkg machinery's
 # installed-probe -- so any caller that did not set it compared the live .pf2
 # against the DEFAULT and reported drift it could not explain. On a real box
 # the fonts were correctly regenerated at 32 and the sweep then said
@@ -320,7 +320,8 @@ rm -f "$REBUILT"
 run install >/dev/null 2>&1 || fail "install non-zero once the drop settled"
 
 # the dracut lister: same guarantee through the ls -l table parser. Restore the
-# full manifest first -- the drop above is PERSISTENT (that is the point: the
+# full manifest first, because the drop above is PERSISTENT (that is the point:
+# the
 # warning is self-clearing), so without this there would be nothing left to drop
 # and the block would pass while asserting nothing.
 full_manifest > "$MANIFEST"
@@ -390,7 +391,7 @@ run check >/dev/null 2>&1 || fail "check dirty after the ownership probe"
 # --- the initramfs must be NEWER than what it was built from -----------------
 # The splash that actually runs at the LUKS prompt is the copy baked INTO the
 # initramfs. Every content check can pass while the boot still shows the
-# previous theme -- a failed regen, a hand-edited theme, or a /boot rolled back
+# previous theme: a failed regen, a hand-edited theme, or a /boot rolled back
 # by a snapshot. A WARN, not a failure: mtime is a proxy.
 touch "$BTD/bootique.script"
 run check 2>&1 | grep -q 'NEWER than' \
@@ -408,7 +409,8 @@ run uninstall >/dev/null 2>&1 || fail "uninstall exited non-zero"
 [ -d "$BTD" ] && fail "plymouth theme dir not removed on uninstall"
 # install EDITS a file it does not own (/etc/grub.d/10_linux, quiet_boot
 # 1 -> 0). It is the only change bootique makes outside its own paths, so
-# it is the one uninstall must put back -- otherwise "uninstalled" leaves a
+# it is the one uninstall must put back, because otherwise "uninstalled" leaves
+# a
 # distro-managed file permanently modified and the closing message is false.
 grep -q '^quiet_boot="1"' "$L10" \
   || fail "uninstall left 10_linux at quiet_boot=0; it edited it, it reverts it"

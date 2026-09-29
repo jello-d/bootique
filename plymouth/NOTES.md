@@ -1,4 +1,4 @@
-# bootique boot splash (plymouth) -- design notes
+# bootique boot splash (plymouth): design notes
 
 The plymouth splash for the whole post-grub boot: initramfs -> LUKS passphrase
 prompt -> systemd startup -> greetd handoff, styled to match the grub 'bootique'
@@ -53,10 +53,10 @@ In `racing` the auto-unlock OWNS THE HEADLINE and the pill is demoted to a
 labelled alternative underneath it, because that is the honest hierarchy: the
 thing actually happening is a network unlock, and a caption under a pill read
 as a footnote to a prompt that appeared to be waiting on the human. Under the
-headline is a progress track -- one cell per racing second, sprites rather than
+headline is a progress track: one cell per racing second, sprites rather than
 a text bar (a proportional font gives its glyphs different advance widths, so a
 text bar visibly JITTERS as it fills, and a block-drawing glyph may not even be
-in the font set plymouth carries into the initramfs) -- with the frontier cell
+in the font set plymouth carries into the initramfs), with the frontier cell
 pulsing at 2Hz. The pulse is load-bearing for the UX: a cell lands only once a
 second, which is far too slow on its own to read as activity rather than as a
 hang. The racing window and the tick rate it is counted in are ONE declaration
@@ -73,18 +73,19 @@ to be auto-unlocking.
 The prompt is LATCHED SHUT at root-mounted: after that, `on_password` draws
 nothing for the rest of the boot. Without it a pill reading "incorrect
 passphrase" appeared during the POST-SWITCH-ROOT half of the boot, over a boot
-that had already succeeded -- the single most confusing thing the splash could
+that had already succeeded, which is the single most confusing thing the splash
+could
 possibly say.
 
 What manifestor's journal establishes (boots of Sep 9/10/11, all identical):
 
 - `plymouthd` is the SAME PROCESS either side of switch-root (PID 475 from
   16.7s in the initramfs to 34.3s at quit). It is not restarted, so every
-  script global -- `attempt` above all -- carries into phase 2.
+  script global (`attempt` above all) carries into phase 2.
 - systemd issues EXACTLY ONE ask-password. `systemd-ask-password-plymouth`
   deactivates at 27.5s and never starts again, and there is one LUKS volume in
   crypttab. So nothing legitimately asks for a passphrase in phase 2.
-- `nvidia-drm` loads at 28.9s and takes fb0 at 30.4s -- AFTER switch-root
+- `nvidia-drm` loads at 28.9s and takes fb0 at 30.4s, AFTER switch-root
   (26.4s), while the splash is still up (quits 34.2s). A late renderer arrives
   under a running theme.
 
@@ -98,7 +99,7 @@ It is NOTED in the boot scroll ("ignoring a password request after unlock")
 rather than swallowed, and that line is also the DISCRIMINATOR for the one
 remaining possibility: if a pill ever shows up after the unlock WITHOUT that
 line, no callback fired and the cause is a stale framebuffer re-blit on the
-modeset instead -- which no theme can fix, and which needs the GPU driver in
+modeset instead, which no theme can fix, and which needs the GPU driver in
 the initramfs (early-KMS, today xe-only).
 
 VERIFIED 2026-09-11, both ways round. On HARDWARE: two manifestor reboots with
@@ -107,8 +108,8 @@ at 30.6s, splash up until 34.8s), and no pill reported. In the VM: the harness
 now MAKES a renderer attach late (a second DRM device whose driver is loaded
 under the running splash, see test/vm/README.md), plymouth adopted it, and the
 splash it drew on that renderer carries no prompt. The assertion was also
-negative-controlled -- dropping a pill frame into the post-unlock set fails it,
-naming the frame -- so it is a test that can actually fail, not a green light.
+negative-controlled: dropping a pill frame into the post-unlock set fails it,
+naming the frame, so it is a test that can actually fail, not a green light.
 
 ### VM-verified (2026-09-04), and what the run taught
 
@@ -154,22 +155,23 @@ initramfs, so it belongs to whatever owns the unlock mechanism, not here.
 - `SetMessageFunction` carries only sparse notices (cryptsetup, fsck, failures);
   they interleave into the same tail.
 - The full raw console log lives behind Esc (plymouth's own detail viewer).
-- GOTCHA: `feed()` MUST be defined BEFORE `on_status` -- plymouth-script binds
+- GOTCHA: `feed()` MUST be defined BEFORE `on_status`, because plymouth-script
+binds
   free names at DEFINITION time, so a later definition is unbound in on_status.
 
 ## Verifying the look
 `test/vm/plymouth-vmcheck` renders the real DRM splash headlessly in a VM
 (virtio-gpu-pci, plymouth.ignore-serial-consoles, sendkey unlock) and
-screendumps the LUKS prompt, the bullets, and the dense scroll -- no reboot.
+screendumps the LUKS prompt, the bullets, and the dense scroll, with no reboot.
 Only the actual Intel `xe` smoothness is left for a real boot.
 
-It is a TEST, not just a screenshot tool -- it fails loud, so a regression
+It is a TEST, not just a screenshot tool: it fails loud, so a regression
 cannot slip through as it did once (a no-render splash shipped because the run
 was eyeballed, not asserted):
 - `plymouth-capture` ABORTS (rc 2) if the LUKS prompt never appears, rather
   than proceeding to screendump plausible garbage.
 - `plymouth-verify` then ASSERTS the frames actually rendered: the bg fills
-  the screen (all corners non-black -- the resize/stranded-corner detector),
+  the screen (all corners non-black, the resize/stranded-corner detector),
   and the prompt pill is present (a green band at centre). The no-prompt bug
   that shipped fails this check; a black frame fails all of them.
 - `vmcheck` exits non-zero (PASS/FAIL line) if either gate trips.
@@ -180,7 +182,8 @@ NOT reproducible in qemu (so still real-boot-only): the post-unlock RESIZE.
 On the Intel box the `xe` GPU driver loads ~35s in and modesets low-EFI-GOP ->
 native, stranding the bg in a corner; qemu's virtio_gpu always sets native
 immediately (three fb configs tried, none reproduce the late modeset), so this
-harness cannot catch a resize regression -- verify's corner check would flag it
+harness cannot catch a resize regression, because verify's corner check would
+flag it
 IF a run ever produced one, but a clean qemu run does not exercise the modeset.
 
 ## The post-unlock resize (fix: xe in the initramfs)
@@ -194,24 +197,24 @@ it: the firmware GOP never exposes native to grub.
 The fix is to force xe (+ firmware) into the initramfs so native is up BEFORE
 plymouth's first frame. The MECHANISM depends on the initramfs generator, which
 `setup.sh`'s `place_kms` detects:
-- DRACUT (this fleet's btrfs standard -- manifold uses it): a generated drop-in
+- DRACUT (this fleet's btrfs standard, which manifold uses): a generated drop-in
   `/etc/dracut.conf.d/90-bootique-kms.conf` with `force_drivers+=" xe "`
-  (dracut bakes that into the INITRAMFS's own cmdline, NOT the kernel's -- do
+  (dracut bakes that into the INITRAMFS's own cmdline, NOT the kernel's, so do
   not look in /proc/cmdline for `rd.driver.pre=xe` and conclude the fix is
   missing; look at when the xe firmware loads relative to the LUKS prompt)
   + `install_items`
   for the firmware xe requests at bind time (DMC + GuC are device-selected, NOT
   in modinfo, so listed explicitly; prefer the on-disk .zst).
 - initramfs-tools (fallback): the self-gating hook `plymouth/bootique-kms`
-  (`force_load xe`). NOTE dracut IGNORES this hook entirely -- it is why the
+  (`force_load xe`). NOTE dracut IGNORES this hook entirely, which is why the
   first attempt never landed (I built an initramfs-tools hook on a dracut box;
   the btrfs memory's "dracut, NOT initramfs-tools; verify lsinitrd" said so).
 Only the mechanism matching the generator is placed; the other is removed. xe-
 only for now (the firmware list is xe/Lunar-Lake specific).
 
 CONFIRMED clean on manifold (2026-08-13): the dracut test boot's journal shows
-`rd.driver.pre=xe`, xedrmfb primary at 2.08s -- BEFORE cryptsetup starts (2.46s,
-the unlock prompt) and 12s before Switching root -- so xe is at native before
+`rd.driver.pre=xe`, xedrmfb primary at 2.08s, BEFORE cryptsetup starts (2.46s,
+the unlock prompt) and 12s before Switching root, so xe is at native before
 the first splash frame. No late modeset, no churn.
 
 Live verification needs a reboot (qemu can't reproduce the late modeset). The
@@ -225,22 +228,22 @@ scripts staged in /var/tmp (/tmp auto-wipes within minutes on this box).
 
 Established live, with plymouth.debug=file logging read back after each boot
 (the diagnostic captured the whole modeset). On a LIVE low-res -> native
-modeset, plymouth CHURNS renderers -- DRM(card0, simpledrm 1440x900) ->
-frame-buffer(/dev/fb0, 2880x1800, re-inited twice) -> DRM(card1, xe) -- and
+modeset, plymouth CHURNS renderers: DRM(card0, simpledrm 1440x900) ->
+frame-buffer(/dev/fb0, 2880x1800, re-inited twice) -> DRM(card1, xe), and
 `Window.GetWidth()` MIS-REPORTS during it (returned 2880 while the scanout was
 still 1440). Every theme/plymouth-side approach was tried live and FAILED:
 - B relayout: trusted the reported 2880, laid out at 2880 on a 1440 buffer ->
-  ZOOM. (The relayout logic itself is correct -- the logged readout showed
-  exactly R1 1440x900 then R2 2880x1800, laid==live -- but the reported size is
+  ZOOM. (The relayout logic itself is correct (the logged readout showed
+  exactly R1 1440x900 then R2 2880x1800, laid==live) but the reported size is
   a lie, so correct logic still zooms.)
 - plymouth.use-simpledrm: IGNORED under LUKS (the option even logs "Ignoring
   UseSimpledrmNoLuks because of LUKS use"); plymouth still switched to xe
   2880x1800 and churned. So a no-relayout theme strands and a relayout theme
-  zooms -- neither wins.
+  zooms, and neither wins.
 So the transition is intractable from above. A (native up BEFORE plymouth's
 first frame) is the fix precisely because it removes the transition: no
 simpledrm phase to hand off from, no churn, no size lie. B stays as the
-committed FALLBACK for a box where A is not active -- it drives the layout to
+committed FALLBACK for a box where A is not active: it drives the layout to
 the correct FINAL size (fills the screen) rather than leaving it permanently
 stranded in a corner; on an A box it never fires (no resize) and is inert.
 
@@ -259,7 +262,7 @@ its own POST) but confirm before assuming.
 ## Shutdown / reboot
 
 AUTOMATED 2026-09-11. This half used to be verified by temporarily forcing
-`is_off=1` so the BOOT harness rendered the shutdown layout -- which tests the
+`is_off=1` so the BOOT harness rendered the shutdown layout, which tests the
 layout but never the branch that SELECTS it, leaving "does a real shutdown pick
 this at all" untestable. The harness now presses the ACPI power button at the
 end of the capture and screendumps the actual shutdown, holding the splash with

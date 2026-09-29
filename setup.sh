@@ -51,7 +51,7 @@ BS_OWNER=${BS_OWNER:-root}
 # not writable by anyone else. A privilege boundary, not tidiness: plymouthd
 # interprets bootique.script AS ROOT (in the initramfs, then again after
 # switch-root), dracut SOURCES the KMS drop-in as shell, and grub-mkconfig
-# sources the grub drop-in -- so a user-writable copy of any of them is
+# sources the grub drop-in, so a user-writable copy of any of them is
 # arbitrary code in a root context at boot or at image-build time. install
 # already writes them root-owned 0644; nothing asserted they STAYED that way,
 # which is precisely the asserted-vs-actual gap a check exists to close.
@@ -109,7 +109,7 @@ _bg_src="$_root/background.png"
 # The same precedence, and for the same reason, as BS_UNLOCK_MODE below: a
 # provisioning layer's choice lands in a FILE, never in an env var it must
 # remember to pass. `check` is invoked with a bare environment by integrators,
-# and by more of them than anyone counts -- this package's check is run by its
+# and by more of them than anyone counts: this package's check is run by its
 # own consumer module, by a human standing in the repo, AND by the pkg
 # machinery's installed-probe. An env-only override is invisible to any caller
 # that does not set it, so the audit compares the live .pf2 against the DEFAULT
@@ -119,7 +119,7 @@ _bg_src="$_root/background.png"
 # WHY IT IS A PER-BOX FACT AT ALL. GRUB renders at the firmware's preferred
 # (native) mode and these fonts are a fixed PIXEL size, so one size is a
 # different fraction of the screen on every panel: 24px is 0.83% of a 2880-wide
-# framebuffer and 0.63% of a 3840-wide one. Density is irrelevant -- a
+# framebuffer and 0.63% of a 3840-wide one. Density is irrelevant, because a
 # higher-dpi panel with FEWER pixels shows the LARGER-looking menu. Which size
 # suits a box is a question about its panel, which this package has no business
 # probing; the integrator decides and writes it here.
@@ -223,7 +223,7 @@ $(_fonts)
 EOF
 }
 
-# gen_bar: the selected-item bar -- one flat GRUB_SELECT_BG tile copied to all 9
+# gen_bar: the selected-item bar, one flat GRUB_SELECT_BG tile copied to all 9
 # slices. -alpha on is LOAD-BEARING: gfxmenu draws NOTHING for a slice
 # with no alpha channel (VM-verified, GPU-independent).
 gen_bar() {
@@ -242,7 +242,7 @@ gen_bar() {
   echo "$PKG: generated selection bar ($GRUB_SELECT_BG)"; NEED_GRUB=1
 }
 
-# gen_frame: the menu frame's 9 slices -- a GRUB_FRAME_PX edge in GRUB_FRAME_BG,
+# gen_frame: the menu frame's 9 slices, a GRUB_FRAME_PX edge in GRUB_FRAME_BG,
 # transparent centre (alpha PNG; the photo shows inside). Every slice needs an
 # alpha channel or gfxmenu draws nothing.
 gen_frame() {
@@ -286,7 +286,7 @@ manage_quiet_boot() {
 
 # revert_quiet_boot: put back the ONE file bootique edits that it does not own.
 # Everything else it installs lives under its own paths and is simply removed,
-# so this is the only change that could outlive an uninstall -- and it is in a
+# so this is the only change that could outlive an uninstall, and it is in a
 # DISTRO-MANAGED file, which makes "uninstalled (reverts to a plain boot)" a
 # false claim while it stands. Reverts ONLY against the stamp: no stamp means
 # either we never flipped it or the install predates the stamp, and in both
@@ -315,7 +315,7 @@ grub_install() {
 # file. Written as if/then/else, NOT `cmp && ok || bad`: in that form a failing
 # `ok` also runs `bad`, so one audit line could print BOTH verdicts and set the
 # drift flag. ok/bad are printf wrappers that return 0 in practice, so this was
-# never live -- but it was twelve shellcheck warnings in the one function whose
+# never live, but it was twelve shellcheck warnings in the one function whose
 # job is to be trusted, and warnings that are always benign are how a real one
 # goes unread.
 _same() {
@@ -644,12 +644,12 @@ EOF
 }
 
 # _initrd_fresh: the splash that actually runs at the LUKS prompt is the copy
-# BAKED INTO THE INITRAMFS, not the one on disk -- so every content check above
+# BAKED INTO THE INITRAMFS, not the one on disk, so every content check above
 # can pass while the boot still shows the previous theme. install rebuilds on
 # any change, so a stale image means something went wrong after it: a failed
 # regen, a hand-edited theme, or a /boot rolled back by a snapshot (this fleet
 # runs grub-btrfs, which makes that a real path rather than a hypothetical).
-# Compares mtimes, which needs no root -- /boot is traversable even though the
+# Compares mtimes, which needs no root: /boot is traversable even though the
 # image itself is 0600.
 _initrd_fresh() {
   _img=$(_initrd_img) || return 0

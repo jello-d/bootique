@@ -1,5 +1,5 @@
-# bootique -- the grub boot-menu theme. A GRUB theme (not the 16-colour
-# menu_color knob) so colours are exact hex. Generated -- do not hand-edit this
+# bootique: the grub boot-menu theme. A GRUB theme (not the 16-colour
+# menu_color knob) so colours are exact hex. Generated; do not hand-edit this
 # deployed copy. Layout + palette:
 #   - a FRAME near the screen edges (menu_pixmap_style = frame_*.png). Menu
 #     items at the top, labels near the bottom.
@@ -8,7 +8,7 @@
 #   - labels sit over the dark foliage, so they are light: the timeout is bold
 #     vibrant green, the help line lavender.
 #   - item_spacing 0 so rows are adjacent (uniform, and the snapshot columns --
-#     box-drawing │ -- form a CONTIGUOUS vertical rule).
+#     box-drawing │, form a CONTIGUOUS vertical rule).
 #   - fonts are 24px, sized for the panel's native-res boot. Percent geometry is
 #     resolution-independent; the loader picks up every .pf2 in this dir.
 desktop-image: "background.png"

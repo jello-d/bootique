@@ -70,14 +70,14 @@ systemctl enable plyhold.service
 # Reproduce the one event this harness was blind to: a DRM device appearing
 # while plymouthd is ALREADY RUNNING, after the unlock. On a discrete-GPU box
 # the display driver loads after switch-root, plymouth attaches the new
-# renderer and REPLAYS its password state onto it -- which the theme once read
+# renderer and REPLAYS its password state onto it, which the theme once read
 # as a second password attempt and captioned "incorrect passphrase" over a boot
 # that had already succeeded.
 #
 # The capture VM carries a SECOND display device (bochs-display) for this. What
 # is late is the DRIVER, not the hardware, which is exactly the real case: the
 # GPU was always in the machine, its module just loaded late. A plain
-# modprobe.d blacklist is the right lever -- it suppresses the udev ALIAS
+# modprobe.d blacklist is the right lever: it suppresses the udev ALIAS
 # auto-load (including inside the initramfs) while leaving an explicit
 # `modprobe bochs` working, so the load happens when this unit says so and not
 # a moment earlier.
@@ -99,7 +99,7 @@ systemctl enable late-renderer.service
 
 # Hold the SHUTDOWN splash the way plyhold holds the boot one. A guest with
 # nothing to stop powers off in about a second, which is not long enough to
-# screendump -- the first attempt caught a single already-black frame.
+# screendump: the first attempt caught a single already-black frame.
 #
 # The ordering is the whole trick. plymouth-poweroff.service runs LATE in the
 # shutdown transaction (it is ordered Before=systemd-poweroff.service), so the
@@ -134,8 +134,8 @@ if [ "$INITRD" = dracut ]; then
   # Installing dracut REPLACES initramfs-tools (both provide the initramfs
   # tool), which is the point: this guest should generate its boot image the way
   # a real box does. hostonly picks up this system's crypt/root layout, but its
-  # GPU guess would be wrong -- the prep VM runs plain VGA while the capture VM
-  # runs virtio-gpu -- so the DRM driver is forced in by name. Without it the
+  # GPU guess would be wrong (the prep VM runs plain VGA while the capture VM
+  # runs virtio-gpu), so the DRM driver is forced in by name. Without it the
   # LUKS-stage splash renders nothing, the same trap MODULES=most avoids on the
   # initramfs-tools side.
   # A debootstrapped base carries only `main`, and dracut lives in universe.
