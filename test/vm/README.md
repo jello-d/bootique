@@ -19,12 +19,12 @@ install, so it is run by hand, not on every change.
 - `plymouth-vmcheck` -- the driver: injects THIS repo's theme (`plymouth/` +
   `background.png`) into an overlay on the base, boots, and screendumps. Reads
   the theme from the repo root by default (override `PLYVM_BOOTIQUE`).
-- `plymouth-prep.sh` -- runs in the guest: installs plymouth, injects the theme,
+- `plymouth-prep` -- runs in the guest: installs plymouth, injects the theme,
   rebuilds the initramfs.
-- `plymouth-capture.py` -- drives the boot over the qemu monitor/serial and
+- `plymouth-capture` -- drives the boot over the qemu monitor/serial and
   screendumps the key frames, including the racing -> required -> rejected
   unlock states.
-- `plymouth-verify.py` -- asserts the frames rendered the expected elements
+- `plymouth-verify` -- asserts the frames rendered the expected elements
   (background fills every corner; the prompt pill is present); turns the harness
   from a screenshot tool into a pass/fail test.
 - `vmexpect` -- a generic expect-over-serial-socket driver.
@@ -44,7 +44,7 @@ done this way because qemu refuses to hotplug a display device at all
 (`Device 'virtio-gpu-pci' does not support hotplugging`).
 
 The gpu1 frames are named `boot-late-*` so the post-unlock "no pill" assertion
-covers them with the rest. `plymouth-verify.py` reports whether plymouth
+covers them with the rest. `plymouth-verify` reports whether plymouth
 actually ADOPTED the renderer, because a run where it did not has not tested the
 replay path however green the rest of the output looks -- and a blank frame
 would otherwise bank a free pass on the one assertion that matters most.
@@ -108,7 +108,7 @@ which is what `PLYVM_SUITE` is for:
 On a NOBLE base the dracut mode proves nothing, and it is worth knowing why
 before trusting a green run there. noble ships dracut 060, whose plymouth module
 gates on a Fedora-ism Debian and Ubuntu never shipped, so the module is skipped
-and the initramfs gets no splash (`plymouth-prep.sh` shims that check; the shim
+and the initramfs gets no splash (`plymouth-prep` shims that check; the shim
 is a harmless no-op on a release that does not need it). Even shimmed, that
 guest brings up no DRM device in the initramfs, so plymouth falls back to TEXT
 mode, the `script` plugin never loads, and no theme state can be observed at

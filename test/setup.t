@@ -12,8 +12,8 @@
 # shapes behave; uninstall removes the drop-ins + theme dirs. Reads the repo's
 # own theme sources; nothing on the box is touched.
 set -eu
-# shellcheck source=test/lib.sh
-. "$(dirname "$0")/lib.sh"
+# shellcheck source=test/harness_lib
+. "$(dirname "$0")/harness_lib"
 harness_init setup
 
 mkdir -p "$T/sbin" "$T/boot/grub" "$T/etc/default/grub.d" "$T/etc/grub.d" \

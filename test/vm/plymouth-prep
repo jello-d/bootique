@@ -1,5 +1,5 @@
 #!/bin/sh
-# test/vm/plymouth-prep.sh - runs as root IN the guest (via a 9p share) to make
+# test/vm/plymouth-prep - runs as root IN the guest (via a 9p share) to make
 # a clean LUKS+btrfs target render the bootique plymouth splash, so
 # plymouth-vmcheck can screendump it. Brings up the qemu user-net, installs
 # plymouth, copies the REPO theme from the share, enables the splash, rebuilds

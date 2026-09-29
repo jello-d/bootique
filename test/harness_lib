@@ -1,5 +1,6 @@
-# test/lib.sh - minimal harness for the bootique in-repo tests. Sourced by each
-# *.t: sets HERE (repo root), a scratch $T (auto-removed), and pass/fail.
+# test/harness_lib - minimal harness for the bootique in-repo tests.
+# Sourced by each *.t: sets HERE (repo root), a scratch $T (auto-removed),
+# and pass/fail.
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT

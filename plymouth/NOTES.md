@@ -164,9 +164,9 @@ Only the actual Intel `xe` smoothness is left for a real boot.
 It is a TEST, not just a screenshot tool -- it fails loud, so a regression
 cannot slip through as it did once (a no-render splash shipped because the run
 was eyeballed, not asserted):
-- `plymouth-capture.py` ABORTS (rc 2) if the LUKS prompt never appears, rather
+- `plymouth-capture` ABORTS (rc 2) if the LUKS prompt never appears, rather
   than proceeding to screendump plausible garbage.
-- `plymouth-verify.py` then ASSERTS the frames actually rendered: the bg fills
+- `plymouth-verify` then ASSERTS the frames actually rendered: the bg fills
   the screen (all corners non-black -- the resize/stranded-corner detector),
   and the prompt pill is present (a green band at centre). The no-prompt bug
   that shipped fails this check; a black frame fails all of them.
