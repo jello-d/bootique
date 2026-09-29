@@ -721,32 +721,59 @@ _report_dropped() {
   COMPOSITION_LOST=1
 }
 
-regen() {
-  if [ -n "$NEED_INITRAMFS" ]; then
-    echo "$PKG: rebuilding initramfs (theme or early-KMS changed)"
-    _img=$(_initrd_img) || _img=
-    _before=
-    if [ -n "$_img" ]; then
-      _before=$(mktemp)
-      _initrd_list "$_img" > "$_before"
-      # An unreadable image is not a pass: say the guard did not run.
-      if [ ! -s "$_before" ]; then
-        rm -f "$_before"; _before=
-        echo "$PKG: cannot list $_img; composition NOT checked this run" >&2
-      fi
-    fi
-    sudo "$UPDATE_INITRAMFS" -u
-    if [ -n "$_before" ]; then
-      _after=$(mktemp)
-      _initrd_list "$_img" > "$_after"
-      _report_dropped "$_before" "$_after"
-      rm -f "$_before" "$_after"
+# The initramfs half of a regen. Split from the grub half because the two have
+# nothing in common but their trigger: different tool, different failure mode
+# (a missing generator is fatal here, a missing grub is merely not applicable),
+# and only this one carries the composition guard.
+_regen_initramfs() {
+  [ -n "$NEED_INITRAMFS" ] || return 0
+  echo "$PKG: rebuilding initramfs (theme or early-KMS changed)"
+  _img=$(_initrd_img) || _img=
+  _before=
+  if [ -n "$_img" ]; then
+    _before=$(mktemp)
+    _initrd_list "$_img" > "$_before"
+    # An unreadable image is not a pass: say the guard did not run.
+    if [ ! -s "$_before" ]; then
+      rm -f "$_before"; _before=
+      echo "$PKG: cannot list $_img; composition NOT checked this run" >&2
     fi
   fi
-  if [ -n "$NEED_GRUB" ]; then
+  # An ABSENT generator is a real failure, not a skip: a theme change is
+  # pending and nothing will bake it in, so the next boot shows the old splash.
+  # Said plainly, because the bare failure is a 127 out of sudo.
+  if ! command -v "$UPDATE_INITRAMFS" >/dev/null 2>&1; then
+    echo "$PKG: $UPDATE_INITRAMFS absent; the initramfs CANNOT be rebuilt," \
+         "so the theme change will not take effect" >&2
+    return 1
+  fi
+  sudo "$UPDATE_INITRAMFS" -u
+  [ -n "$_before" ] || return 0
+  _after=$(mktemp)
+  _initrd_list "$_img" > "$_after"
+  _report_dropped "$_before" "$_after"
+  rm -f "$_before" "$_after"
+}
+
+# The grub half. The _has_grub gate lives HERE and not at the call site,
+# because a GRUBLESS box still reaches this: the splash half writes a cmdline
+# drop-in under /etc/default/grub.d, which sets NEED_GRUB even when the grub
+# half was skipped. Without the gate, install announced "skipping the grub
+# theme" and then died 127 on the very command it had just called absent.
+_regen_grub() {
+  [ -n "$NEED_GRUB" ] || return 0
+  if _has_grub; then
     echo "$PKG: regenerating grub.cfg (menu or cmdline changed)"
     sudo "$GRUB_MKCONFIG" -o "$GRUB_CFG"
+  else
+    echo "$PKG: no grub here; nothing to regenerate (drop-in left in place)"
+    NEED_GRUB=
   fi
+}
+
+regen() {
+  _regen_initramfs || return 1
+  _regen_grub
   [ -n "$NEED_INITRAMFS$NEED_GRUB" ] \
     && echo "$PKG: boot cosmetics changed -- reboot to see them."
   return 0
@@ -782,7 +809,7 @@ do_uninstall() {
   [ -d "$BS_THEMEDIR" ] && { sudo rm -rf "$BS_THEMEDIR"
                             echo "$PKG: removed $BS_THEMEDIR"; }
   NEED_GRUB=1 NEED_INITRAMFS=1
-  _has_grub && regen
+  regen
   echo "$PKG: uninstalled (reverts to a plain boot on the next rebuild)."
 }
 

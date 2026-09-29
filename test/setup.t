@@ -140,12 +140,16 @@ UMODE=auto; CLEVIS_BIN=absent-clevis; MODEFILE=$T/etc/bootique/unlock-mode
 # Which initramfs lister the guard may find. Both are pinned so the host's real
 # tools can never leak in and decide which branch the suite exercises.
 LSFS=lsinitramfs; LSRD=absent-lsinitrd
+# Pinned too, so a test can make the generator ABSENT by name rather
+# than by moving a stub and hoping the host has no real one.
+UPD=update-initramfs
 DMODS=$T/dracut-mods; mkdir -p "$DMODS"
 run() {
   env -i PATH="$T/sbin:/usr/bin:/bin" NO_COLOR=1 ALT_STATE="$ALT_STATE" \
     BS_UNLOCK_MODE="$UMODE" BS_CLEVIS_BIN="$CLEVIS_BIN" \
     BS_MODE_FILE="$MODEFILE" BS_DRACUT_MODDIR="$DMODS" \
     BS_INITRD_DIR="$T/boot" LSINITRAMFS="$LSFS" LSINITRD="$LSRD" \
+    UPDATE_INITRAMFS="$UPD" \
     GRUB_ASSETDIR="$GAD" GRUB_BG_DST="$GAD/background.png" \
     GRUB_THEME_DST="$GAD/theme.txt" GRUB_DROPIN_DST="$GDROP" \
     GRUB_SELECT_STAMP="$GAD/.sel.bg" GRUB_FRAME_STAMP="$GAD/.frame.spec" \
@@ -451,5 +455,86 @@ run install 2>&1 | grep -q "no 'unlock_mode = ' line" \
   || fail "install did not name the missing unlock_mode marker"
 SCRIPT=
 run install >/dev/null 2>&1 || fail "install broken after the marker probe"
+
+# --- a GRUBLESS box installs the splash and does not die on grub-mkconfig ----
+# THE BUG THIS PINS: do_install called regen unconditionally while
+# do_uninstall guarded it, so on a box with no grub, install printed
+# "skipping the grub theme" and then exited 127 running the very command it
+# had just called absent. The splash half is what got it there: its cmdline
+# drop-in lives under /etc/default/grub.d, so it sets NEED_GRUB even when the
+# grub half never ran. Both the README and the man page promise this box
+# "simply skips that half", and an integrator reads a 127 as a hard failure.
+run uninstall >/dev/null 2>&1
+mkdir -p "$T/stash"; mv "$T/sbin/grub-mkconfig" "$T/stash/"
+run install >"$T/out" 2>&1 || fail "install died on a box with no grub"
+[ -d "$BTD" ] || fail "the splash half did not install on a grubless box"
+[ -d "$GAD" ] && fail "the grub half installed on a box with no grub"
+# Read from the FIRST install: a second one is idempotent, so NEED_GRUB is
+# empty and there is nothing for it to report either way.
+grep -q 'nothing to regenerate' "$T/out" \
+  || fail "install did not say why it skipped the grub.cfg regen"
+# and uninstall must STILL rebuild the initramfs there: the theme is baked
+# into the image, so skipping the rebuild leaves it on screen at the next
+# boot. This is what the old `_has_grub && regen` got wrong in the other
+# direction once the gate moved inside regen.
+rm -f "$IMARK"
+run uninstall >/dev/null 2>&1 || fail "uninstall failed on a grubless box"
+[ -f "$IMARK" ] || fail "uninstall skipped the initramfs rebuild"
+mv "$T/stash/grub-mkconfig" "$T/sbin/"
+
+# --- an absent initramfs generator FAILS, and says so ------------------------
+# The other half of the same question, and the opposite answer: no grub means
+# nothing to regenerate, but no generator with a theme change pending means
+# the change silently will not take effect. That is a failure, and the bare
+# version of it is a 127 out of sudo with no explanation.
+run uninstall >/dev/null 2>&1
+UPD=absent-update-initramfs
+run install >"$T/out" 2>&1 && fail "install passed with no initramfs generator"
+grep -q 'CANNOT be rebuilt' "$T/out" \
+  || fail "install did not name the absent initramfs generator"
+UPD=update-initramfs
+run install >/dev/null 2>&1 \
+  || fail "install broken after the generator probe"
+
+# --- check exits 0 or 1, NEVER anything else ---------------------------------
+# A CONTRACT with the integrator, not a preference: tackup's modules/bootique
+# folds this code into its own verdict and reads anything else as drift, so a
+# stray `exit 2` from a future edit would surface as an unexplainable failure
+# about installation rather than about what was wrong.
+_rc=0; run check >/dev/null 2>&1 || _rc=$?
+[ "$_rc" = 0 ] || fail "check on a clean install exited $_rc, want 0"
+run uninstall >/dev/null 2>&1
+_rc=0; run check >/dev/null 2>&1 || _rc=$?
+[ "$_rc" = 1 ] || fail "check on an uninstalled box exited $_rc, want 1"
+
+# --- uninstall is idempotent -------------------------------------------------
+# Running it twice must be the same as running it once: the second pass has
+# nothing to remove and must still exit 0, or a provisioning layer that
+# re-applies reads a clean box as a failure.
+run uninstall >/dev/null 2>&1 || fail "a second uninstall exited non-zero"
+[ -d "$GAD" ] && fail "a second uninstall resurrected the grub theme dir"
+[ -d "$BTD" ] && fail "a second uninstall resurrected the plymouth theme dir"
+run install >/dev/null 2>&1 || fail "install broken after the double uninstall"
+
+# --- a font size that is NUMERIC but out of range falls back ------------------
+# The garbage case above covers the non-numeric branch; this covers the range
+# check, which is a separate line and was never exercised. 4px is unreadable
+# and 9999px would hand grub-mkfont something it cannot do, so both must leave
+# the default standing rather than be trusted.
+for _px in 4 9999; do
+  printf '%s\n' "$_px" > "$FONTFILE"
+  run install >/dev/null 2>&1 || fail "install failed on font-size $_px"
+  grep -q 'Regular 24' "$GAD/mono.pf2" \
+    || fail "an out-of-range font size ($_px) was not rejected"
+done
+# ...and the bounds themselves are INCLUSIVE, which is the other half of a
+# range check and the half that is usually off by one.
+for _px in 8 128; do
+  printf '%s\n' "$_px" > "$FONTFILE"
+  run install >/dev/null 2>&1 || fail "install failed on font-size $_px"
+  grep -q "Regular $_px" "$GAD/mono.pf2" \
+    || fail "font size $_px is in range and must be honoured"
+done
+rm -f "$FONTFILE"
 
 pass "install + idempotent + check + KMS shapes + revert + uninstall"
