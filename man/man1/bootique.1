@@ -43,7 +43,12 @@ Audit every managed piece; emit [OK]/[FAIL]/[WARN] markers and a non-zero exit
 on drift.
 .TP
 .B test
-Run the in-repo stub suite (no root; nothing on the box is touched).
+Run the in-repo suite: the stub-driven install/check tests, a shellcheck gate
+over every shell file, and the house-convention assertions. No root; nothing on
+the box is touched.
+.TP
+.B version
+Print the package name and version.
 .SH UNLOCK PROMPT
 Where a network auto-unlock (clevis/Tang) exists it races the human for the same
 passphrase request, so the passphrase pill is live from the first frame in
@@ -110,6 +115,14 @@ The installed Plymouth theme (bootique.plymouth, bootique.script, the PNGs).
 .I /etc/default/grub.d/{bootique,splash}.cfg
 The GRUB_THEME and quiet-splash drop-ins.
 .TP
+.I /etc/dracut.conf.d/90-bootique-kms.conf
+The early-KMS drop-in on a dracut box (the driver and its firmware). Removed
+when the box uses initramfs-tools instead.
+.TP
+.I /etc/initramfs-tools/hooks/bootique-kms
+The early-KMS hook on an initramfs-tools box. Removed when the box uses dracut
+instead; only the mechanism matching the generator is ever placed.
+.TP
 .I /etc/bootique/unlock-mode
 Optional persistent unlock-mode override, one word:
 .B local
@@ -117,6 +130,18 @@ or
 .BR remote .
 Written by an operator or a provisioning layer; bootique reads it and never
 creates or removes it.
+.TP
+.I /etc/bootique/font-size
+Optional GRUB menu font size in pixels, one number. Precedence is
+.B GRUB_FONT_SIZE
+in the environment, then this file, then 24. It is a FILE rather than an
+environment variable alone because
+.B check
+is invoked with a bare environment by a provisioning layer, where an env-only
+override would be invisible and every audit would report drift it could not
+explain. Size by fraction of the panel, not by physical measurement: 24px was
+picked by eye at 2880 pixels wide. Like the unlock-mode file, bootique reads it
+and never creates or removes it.
 .SH SEE ALSO
 .BR plymouth (8),
 .BR grub-mkconfig (8),

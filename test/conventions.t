@@ -157,4 +157,23 @@ for _f in $_files; do
   _n=$((_n + 1))
 done
 
-pass "$_n checks: parse, 80 cols, tabs, py indent, *_lib, bare names, modes"
+# --- 8. NO EM-DASHES, in prose, comments or docs ----------------------------
+# The house rule bans the character outright. Only the em-dash half is
+# assertable: the rule also bans a double hyphen STANDING IN for one, and `--`
+# is the separator this whole tree already uses, so a check could not tell the
+# two apart. The character itself has no such ambiguity, and the README was
+# carrying twelve of them as the only file in the repo that did.
+#
+# The pattern is built from its BYTES on purpose, so this file does not contain
+# the character it forbids and cannot flag itself.
+_emdash=$(printf '\342\200\224')
+_endash=$(printf '\342\200\223')
+for _f in $_files; do
+  case "$_f" in *.png) continue ;; esac
+  grep -qE "$_emdash|$_endash" "$HERE/$_f" || continue
+  fail "$_f contains an em-dash or en-dash. Rewrite the sentence, or use the
+    '--' this tree uses everywhere else."
+done
+_n=$((_n + 1))
+
+pass "$_n checks: parse, 80 cols, tabs, indent, *_lib, names, modes, dashes"
