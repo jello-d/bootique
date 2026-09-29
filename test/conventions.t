@@ -61,7 +61,11 @@ done
 $_long"
 _n=$((_n + 1))
 
-# --- 3. INDENT WITH 2 SPACES, NEVER TABS -------------------------------------
+# --- 3. NEVER TABS, where the language does not demand them ------------------
+# Indentation follows the LANGUAGE (shell 2, python 4, Go and Make tabs); what
+# is universal is that a tab is wrong wherever the toolchain did not ask for
+# one. Nothing here is Go or Make, so nothing here may carry a tab.
+#
 # A file that legitimately CONTAINS a tab declares so with a `tabs-are-data:`
 # marker in its header and says why. That is the honest shape for an exception:
 # it lives in the file it applies to, it carries its reason, and it cannot be
@@ -77,24 +81,30 @@ for _f in $_files; do
 done
 _n=$((_n + 1))
 
-# --- 4. Python indents in steps of exactly 2 ---------------------------------
-# The tab check cannot see this one: 4-space Python is tab-free and still
-# wrong. Asserted over tokenize's INDENT tokens rather than over raw leading
-# whitespace, so a continuation line aligned under an open paren (which may sit
-# at any column) is not mistaken for an indent level.
+# --- 4. Python indents in steps of exactly 4 ---------------------------------
+# FOUR, not the house default of two: PEP 8 says 4 and black is not
+# configurable, so a 2-space file fights the language's own formatter and loses
+# every contributor's editor and every linter agreeing with the repo. The house
+# 2 applies where the language has no answer of its own, which shell is and
+# python is not.
+#
+# The tab check cannot see this one: wrongly-indented python is tab-free and
+# still wrong. Asserted over tokenize's INDENT tokens rather than over raw
+# leading whitespace, so a continuation line aligned under an open paren (which
+# may sit at any column) is not mistaken for an indent level.
 for _f in $_files; do
   _p="$HERE/$_f"
   _has_shebang "$_p" || continue
   case "$(_shebang "$_p")" in *python*) ;; *) continue ;; esac
-  python3 - "$_p" <<'PY' || fail "$_f does not indent in steps of 2 (see above)"
+  python3 - "$_p" <<'PY' || fail "$_f does not indent in steps of 4 (see above)"
 import sys, tokenize
 path = sys.argv[1]
 levels, bad = [0], 0
 with open(path) as fh:
   for t in tokenize.generate_tokens(fh.readline):
     if t.type == tokenize.INDENT:
-      if "\t" in t.string or len(t.string) - levels[-1] != 2:
-        print("  %s:%d: indent step %d (want 2)"
+      if "\t" in t.string or len(t.string) - levels[-1] != 4:
+        print("  %s:%d: indent step %d (want 4)"
               % (path, t.start[0], len(t.string) - levels[-1]))
         bad = 1
       levels.append(len(t.string))
