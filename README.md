@@ -134,14 +134,21 @@ drop-in *composes* with that setup's own initramfs drop-ins.
 `./setup.sh test` runs the whole in-repo suite: the stub-driven install/check
 tests, a shellcheck gate over every shell file (derived from the tracked set,
 so a new script is covered the day it lands), and `test/conventions.t`, which
-asserts the house conventions: 80 columns, 2-space indentation, bare names
-for what is executed, the `*_lib` marker for what is sourced, and the exec bit
-agreeing with the shebang.
+asserts eight conventions over the tracked files: 80 columns, no stray tabs,
+indentation per language (2 spaces, and 4 for Python because PEP 8 and black
+say so), bare names for what is executed, the `*_lib` marker for what is
+sourced, the exec bit agreeing with the shebang, no em-dashes, and every shell
+file parsing under its own interpreter.
 
-A tracked pre-commit hook enforces the 80-column limit on staged lines. Enable
-it once per clone:
+A tracked pre-commit hook RUNS that same test rather than reimplementing any of
+it, and over the whole tree rather than your staged diff, so a violation
+anywhere blocks the commit. Enable it once per clone:
 
     git config core.hooksPath .githooks
+
+It is a backstop, not the rule: `--no-verify` bypasses it in one keystroke. A
+deliberate exception is a path glob with its reason in
+`test/conventions.exempt`, which this repo does not currently need.
 
 ## License
 
