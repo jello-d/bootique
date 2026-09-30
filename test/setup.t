@@ -177,7 +177,7 @@ grep -q 'Bold 24' "$GAD/mono-bold.pf2" || fail "grub bold font wrong name"
 # THE BUG THIS PINS: the size was first plumbed as an env var an integrator
 # passed. `check` is run with a bare environment by more callers than anyone
 # counts: the consumer module, a human in the repo, and the pkg machinery's
-# installed-probe -- so any caller that did not set it compared the live .pf2
+# installed-probe, so any caller that did not set it compared the live .pf2
 # against the DEFAULT and reported drift it could not explain. On a real box
 # the fonts were correctly regenerated at 32 and the sweep then said
 # `bootique: uninstalled`. Same precedence, and the same reasoning, as
@@ -351,7 +351,7 @@ printf '%s' "$out" | grep -q 'composition NOT checked' \
   || fail "guard skipped the composition check without saying so"
 LSFS=lsinitramfs; LSRD=absent-lsinitrd
 
-# --- KMS generator switch: initramfs-tools mode uses the hook, not the conf --
+# --- KMS generator switch: initramfs-tools mode uses the hook, not the conf ---
 USES_DRACUT=0
 run install >/dev/null 2>&1 || fail "install (initramfs-tools mode) non-zero"
 cmp -s "$HERE/plymouth/bootique-kms" "$HOOK" || fail "early-KMS hook not placed"
@@ -444,7 +444,7 @@ grep -q ':rgba$' "$GAD/.frame.spec" || fail "install did not re-stamp the frame"
 
 # --- a reflowed unlock_mode marker must STOP the install --------------------
 # _gen_script rewrites that ONE line. If it is ever renamed or wrapped, install
-# would otherwise ship the repo default to a box that needs the other mode --
+# would otherwise ship the repo default to a box that needs the other mode,
 # silently, which is the whole reason that guard exists.
 mkdir -p "$T/repo/plymouth" "$T/repo/grub"
 cp "$HERE/setup.sh" "$T/repo/"; cp "$HERE/background.png" "$T/repo/"

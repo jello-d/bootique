@@ -127,7 +127,7 @@ else:
 # --- the LATCH: no prompt may come back after the unlock ----------------------
 # Once the root fs is mounted the theme latches the prompt shut, because
 # plymouth REPLAYS its password state onto a renderer that attaches late, and a
-# discrete GPU whose driver loads after switch-root, with the splash still up --
+# discrete GPU whose driver loads after switch-root, with the splash still up,
 # and the theme counted that replay as a second attempt, putting a pill reading
 # "incorrect passphrase" over a boot that had already succeeded.
 #

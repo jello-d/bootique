@@ -69,12 +69,12 @@ _own_ok() {
     return 0
   fi
   if [ "$_u" != "$BS_OWNER" ]; then
-    bad "$2 is owned by $_u, not $BS_OWNER -- root reads this file"
+    bad "$2 is owned by $_u, not $BS_OWNER; root reads this file"
     return 0
   fi
   if [ -n "$(find "$1" -maxdepth 0 \
              \( -perm -0020 -o -perm -0002 \) 2>/dev/null)" ]; then
-    bad "$2 is group- or world-writable -- root reads this file"
+    bad "$2 is group- or world-writable; root reads this file"
     return 0
   fi
   ok "$2 owned by $BS_OWNER, not writable by others"
@@ -775,7 +775,7 @@ regen() {
   _regen_initramfs || return 1
   _regen_grub
   [ -n "$NEED_INITRAMFS$NEED_GRUB" ] \
-    && echo "$PKG: boot cosmetics changed -- reboot to see them."
+    && echo "$PKG: boot cosmetics changed; reboot to see them."
   return 0
 }
 

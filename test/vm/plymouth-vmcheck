@@ -157,7 +157,7 @@ echo "vmcheck: key shots -> 01-luks-empty.png 02-luks-bullets.png boot-10.png"
 # render the prompt/bg, is a FAILURE, not a silently-green run. This is what
 # turns the harness from a screenshot tool into a repeatable test.
 if [ "$_caprc" -ne 0 ]; then
-  echo "vmcheck: FAIL -- capture did not reach its states (rc=$_caprc);" \
+  echo "vmcheck: FAIL: capture did not reach its states (rc=$_caprc);" \
        "see $SCRATCH/cap-driver.log" >&2
   exit 1
 fi
@@ -166,7 +166,7 @@ if PLYVM_UNLOCK_MODE=$UNLOCK_MODE python3 "$HERE/plymouth-verify" "$OUT"
 then
   echo "vmcheck: PASS"
 else
-  echo "vmcheck: FAIL -- frame verification failed (see the FAIL lines above)" \
+  echo "vmcheck: FAIL: frame verification failed (see the FAIL lines above)" \
        >&2
   exit 1
 fi

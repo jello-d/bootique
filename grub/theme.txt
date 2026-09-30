@@ -7,7 +7,7 @@
 #     SELECTED item is bold purple on a light-green bar (sel_*.png).
 #   - labels sit over the dark foliage, so they are light: the timeout is bold
 #     vibrant green, the help line lavender.
-#   - item_spacing 0 so rows are adjacent (uniform, and the snapshot columns --
+#   - item_spacing 0 so rows are adjacent (uniform, and the snapshot columns,
 #     box-drawing │, form a CONTIGUOUS vertical rule).
 #   - fonts are 24px, sized for the panel's native-res boot. Percent geometry is
 #     resolution-independent; the loader picks up every .pf2 in this dir.

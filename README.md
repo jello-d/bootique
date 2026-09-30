@@ -5,7 +5,7 @@
 bootique is a boot-cosmetics suite: a GRUB menu theme and a Plymouth boot
 splash that share one forest photo and one palette, so a machine looks like
 itself from power-on to login. Unlike a `~/.local` gadget it is a *theme pack
-with a system installer* -- its `setup.sh` installs to `/boot/grub/themes/
+with a system installer*: its `setup.sh` installs to `/boot/grub/themes/
 bootique` and `/usr/share/plymouth/themes/bootique` (root, sudo) and rebuilds
 the initramfs + `grub.cfg`.
 
