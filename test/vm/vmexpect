@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""vmexpect -- tiny expect-over-serial-socket driver for headless VM tests.
+"""vmexpect: a tiny expect-over-serial-socket driver for headless VM tests.
 
 Connects to a QEMU chardev UNIX socket (the guest's serial line), then walks an
-interaction script -- matching guest output and INJECTING input -- so an
+interaction script, matching guest output and INJECTING input, so an
 interactive boot (a LUKS passphrase prompt, an installer question) can be driven
 and its success asserted with no graphical console. Pure stdlib, no deps.
 

@@ -310,7 +310,7 @@ else:
     drew = [(f, v) for f, v in means if v >= 0.05]
     if not drew:
         check("shutdown: the splash rendered before the guest powered off",
-              False, "%d frame(s), all blank (darkest %.3f) -- the splash was"
+              False, "%d frame(s), all blank (darkest %.3f); the splash was"
               " missed or never came up" % (len(sd), min(v for _, v in means)))
     else:
         darkest, dv = min(drew, key=lambda t: t[1])
