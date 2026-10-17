@@ -42,6 +42,33 @@ ok()   { printf '  %s[OK]%s   %s\n' "$_G" "$_O" "$1"; }
 bad()  { printf '  %s[FAIL]%s %s\n' "$_R" "$_O" "$1"; RC=1; }
 warn() { printf '  %s[WARN]%s %s\n' "$_Y" "$_O" "$1"; }
 
+# A REPORTER MUST NOT DIE IN SILENCE, which is what this trap exists to
+# guarantee. Under `set -eu` any command whose non-zero status leaks kills this
+# script WHERE IT STANDS, with whatever it had printed so far and nothing more:
+# a function falling off a failing test, or an assignment taking the status of a
+# failing command substitution. An integrator then reads exit 1 with no [FAIL]
+# and no message, which tackup's driver classifies as a crash and which before
+# that read as drift with nothing under it. One real instance is fixed in
+# `_native_mode`; this is the backstop for the CLASS, so the next one names
+# itself here rather than costing another 70-minute VM gate run to locate.
+#
+# Armed before the first system read, because the instance that bit was a
+# TOP-LEVEL assignment: a trap armed inside the `check` arm would have been too
+# late to see it. `_reported` is set at each exit that has already said its
+# piece, so this speaks only for the ones that have not.
+_STAGE=startup
+_reported=
+_on_exit() {
+  _s=$?
+  { [ -n "$_reported" ] || [ "$_s" = 0 ]; } && exit "$_s"
+  printf '  %s[FAIL]%s %s\n' "$_R" "$_O" \
+    "ABORTED in stage '$_STAGE' at status $_s, before reporting a verdict."
+  printf '  %s[FAIL]%s %s\n' "$_R" "$_O" \
+    "That is a bug in $PKG's own setup.sh, NOT drift on this box."
+  exit 1
+}
+trap _on_exit EXIT
+
 # The identity that must own anything root reads. Overridable ONLY so the
 # in-repo test can drive these checks as an ordinary user in a scratch tree;
 # on a real box it is root and nothing sets it.
@@ -386,12 +413,24 @@ _alt_target=$BS_THEMEDIR/bootique.plymouth
 
 # GRUB_GFXMODE for the plymouth drop-in: the native mode of the first connected
 # panel (resolves headless). Menu cosmetics; the real resize fix is early-KMS.
+# Overridable ONLY so the in-repo test can plant a DRM state; nothing sets it on
+# a real box. The file's own header promises every system path is overridable,
+# and this one was not, which is why the bug below went untested.
+BS_DRM_ROOT=${BS_DRM_ROOT:-/sys/class/drm}
 _native_mode() {
-  for _c in /sys/class/drm/*/status; do
+  for _c in "$BS_DRM_ROOT"/*/status; do
     [ "$(cat "$_c" 2>/dev/null)" = connected ] || continue
     _md=${_c%/status}/modes
     [ -s "$_md" ] && { head -n1 "$_md"; return 0; }
   done
+  # NO PANEL ANSWERED, which is a legitimate outcome (headless, or pre-modeset)
+  # and the caller already treats an empty answer as "omit GRUB_GFXMODE". This
+  # `return 0` is load-bearing: without it the function falls off a FAILING
+  # `[ -s ]` test, the assignment below takes that status, and `set -e` kills
+  # the whole script THERE, before a single line of output. That is how `check`
+  # came to exit 1 in silence on a connected connector whose `modes` was still
+  # empty, which is every freshly provisioned box before its first reboot.
+  return 0
 }
 BS_GFXMODE=${BS_GFXMODE:-$(_native_mode)}
 
@@ -439,21 +478,21 @@ _load_mode() {
     local|remote) _MODE=$BS_UNLOCK_MODE; _MODE_WHY=BS_UNLOCK_MODE; return 0 ;;
     auto) : ;;
     *) echo "$PKG: BS_UNLOCK_MODE must be auto, local or remote (got" \
-            "'$BS_UNLOCK_MODE')" >&2; exit 2 ;;
+            "'$BS_UNLOCK_MODE')" >&2; _reported=1; exit 2 ;;
   esac
   # -e before -r: a file that EXISTS but cannot be read is an operator saying
   # something we cannot hear. Falling through to autodetection there would
   # silently discard an explicit override, then report the result as settled.
   if [ -e "$BS_MODE_FILE" ]; then
     [ -r "$BS_MODE_FILE" ] || { echo "$PKG: $BS_MODE_FILE exists but is not" \
-      "readable; refusing to guess the unlock mode" >&2; exit 2; }
+      "readable; refusing to guess the unlock mode" >&2; _reported=1; exit 2; }
     _fm=$(awk 'NF && $1 !~ /^#/ {print $1; exit}' "$BS_MODE_FILE")
     case "$_fm" in
       local|remote) _MODE=$_fm; _MODE_WHY=$BS_MODE_FILE; return 0 ;;
       '') echo "$PKG: $BS_MODE_FILE is empty; write 'local' or 'remote', or" \
-               "delete it to autodetect" >&2; exit 2 ;;
+               "delete it to autodetect" >&2; _reported=1; exit 2 ;;
       *) echo "$PKG: $BS_MODE_FILE: expected 'local' or 'remote', got" \
-              "'$_fm'" >&2; exit 2 ;;
+              "'$_fm'" >&2; _reported=1; exit 2 ;;
     esac
   fi
   if command -v "$BS_CLEVIS_BIN" >/dev/null 2>&1; then
@@ -479,7 +518,7 @@ _gen_script() {
   # default to a box that needs the other mode, silently.
   grep -qx "unlock_mode = \"$_MODE\";" "$1" || {
     echo "$PKG: bootique.script has no 'unlock_mode = ' line to set" >&2
-    exit 1
+    _reported=1; exit 1
   }
 }
 
@@ -534,10 +573,15 @@ place_dropin() {
 }
 _gpu_driver() {
   [ -n "${BS_GPU_DRIVER+x}" ] && { printf '%s' "$BS_GPU_DRIVER"; return 0; }
-  for _d in /sys/class/drm/card*/device/driver; do
+  for _d in "$BS_DRM_ROOT"/card*/device/driver; do
     [ -e "$_d" ] || continue
     [ "$(basename "$(readlink -f "$_d")")" = xe ] && { printf xe; return 0; }
   done
+  # PROPHYLACTIC, not a fix for a live bug: every call site today reads this
+  # through `[ "$(_gpu_driver)" = xe ]`, where the status is discarded, so
+  # falling off cannot bite. It is one bare call away from the failure
+  # `_native_mode` actually had, and it has no test for that reason.
+  return 0
 }
 _uses_dracut() {
   case "${BS_USES_DRACUT:-auto}" in 1) return 0 ;; 0) return 1 ;; esac
@@ -639,6 +683,7 @@ EOF
   _own_ok "$BS_DROPIN" "splash cmdline drop-in"
   if _uses_dracut; then _own_ok "$BS_DRACUT_CONF" "dracut early-KMS conf"
   else _own_ok "$BS_HOOK_DST" "early-KMS initramfs hook"; fi
+  _STAGE='initramfs freshness'
   _initrd_fresh
   return 0
 }
@@ -745,7 +790,7 @@ _regen_initramfs() {
   if ! command -v "$UPDATE_INITRAMFS" >/dev/null 2>&1; then
     echo "$PKG: $UPDATE_INITRAMFS absent; the initramfs CANNOT be rebuilt," \
          "so the theme change will not take effect" >&2
-    return 1
+    _reported=1; return 1
   fi
   sudo "$UPDATE_INITRAMFS" -u
   [ -n "$_before" ] || return 0
@@ -793,7 +838,7 @@ do_install() {
   # and that must not read as success to a human or to a provisioning layer.
   # Self-clearing: the next run's "before" no longer has those paths either, so
   # an intended removal warns exactly once.
-  [ -z "$COMPOSITION_LOST" ] || return 1
+  [ -z "$COMPOSITION_LOST" ] || { _reported=1; return 1; }
 }
 
 do_uninstall() {
@@ -814,12 +859,16 @@ do_uninstall() {
 }
 
 do_check() {
+  _STAGE='check header'
   echo "== $PKG (boot cosmetics: grub menu + plymouth splash) =="
   _any=
+  _STAGE='grub assertions'
   if _has_grub; then grub_check; _any=1
   else ok "grub-mkconfig absent; boot-menu styling not applicable"; fi
+  _STAGE='plymouth assertions'
   if _has_plymouth; then plymouth_check; _any=1
   else ok "plymouth absent; boot splash not applicable"; fi
+  _STAGE='check tail'
   [ -n "$_any" ] || ok "neither grub nor plymouth present"
 }
 
@@ -827,9 +876,10 @@ _U="usage: setup.sh [install|uninstall|check|test|version]"
 case "${1:-install}" in
   install)   do_install ;;
   uninstall) do_uninstall ;;
-  check)     do_check; exit "$RC" ;;
+  check)     do_check; _reported=1; exit "$RC" ;;
   test)      exec sh "$_root/test/run" ;;
   version)   echo "$PKG $VERSION" ;;
   -h|--help|help) echo "$_U" ;;
-  *) echo "setup.sh: unknown command '${1:-}'" >&2; echo "$_U" >&2; exit 2 ;;
+  *) echo "setup.sh: unknown command '${1:-}'" >&2; echo "$_U" >&2
+     _reported=1; exit 2 ;;
 esac

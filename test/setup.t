@@ -143,6 +143,12 @@ LSFS=lsinitramfs; LSRD=absent-lsinitrd
 # Pinned too, so a test can make the generator ABSENT by name rather
 # than by moving a stub and hoping the host has no real one.
 UPD=update-initramfs
+# The DRM tree the panel readers look at. Pinned to a scratch dir so the suite
+# can never read the HOST's connectors, and so a test can PLANT a connector
+# state. GFX empty means "do not pass BS_GFXMODE", which is what makes
+# _native_mode run at all: with it pinned, the reader was never exercised.
+DRM=$T/drm-empty; mkdir -p "$DRM"
+GFX=1440x900
 DMODS=$T/dracut-mods; mkdir -p "$DMODS"
 run() {
   env -i PATH="$T/sbin:/usr/bin:/bin" NO_COLOR=1 ALT_STATE="$ALT_STATE" \
@@ -157,7 +163,8 @@ run() {
     GRUB_CFG="$T/boot/grub/grub.cfg" GRUB_FONT_FILE="$FONTFILE" \
     ${GRUB_FONT_SIZE:+GRUB_FONT_SIZE="$GRUB_FONT_SIZE"} \
     ${GRUB_LABEL_SIZE:+GRUB_LABEL_SIZE="$GRUB_LABEL_SIZE"} \
-    BS_THEMEDIR="$BTD" BS_DROPIN="$BDROP" BS_GFXMODE="1440x900" \
+    BS_THEMEDIR="$BTD" BS_DROPIN="$BDROP" BS_DRM_ROOT="$DRM" \
+    ${GFX:+BS_GFXMODE="$GFX"} \
     BS_OWNER="${OWNER:-$(id -un)}" \
     BS_USES_DRACUT="$USES_DRACUT" BS_GPU_DRIVER="$GPU" \
     BS_DRACUT_CONF="$DCONF" BS_FW_ROOT="$FWROOT" BS_HOOK_DST="$HOOK" \
@@ -538,5 +545,64 @@ for _px in 8 128; do
     || fail "font size $_px is in range and must be honoured"
 done
 rm -f "$FONTFILE"
+
+# --- a connected panel with no modes YET must not kill the check -------------
+# THE BUG THIS PINS, tackup request B1: `_native_mode` fell off a FAILING
+# `[ -s "$_md" ]` test, the assignment that defaults BS_GFXMODE from it took
+# that status, and `set -e` killed setup.sh AT THAT ASSIGNMENT. So `check`
+# exited 1 having printed NOTHING AT ALL, not even its header, and an
+# integrator reads that as a crash (tackup) or as drift with nothing under it.
+# A connector that reads `connected` while its `modes` is still empty is every
+# freshly provisioned box before its first reboot, which is exactly when it was
+# seen and why rebooting "fixed" it.
+mkdir -p "$T/drm-premodeset/card0-eDP-1"
+printf 'connected\n' > "$T/drm-premodeset/card0-eDP-1/status"
+: > "$T/drm-premodeset/card0-eDP-1/modes"      # connected, not yet probed
+DRM=$T/drm-premodeset; GFX=
+run install >/dev/null 2>&1 || fail "install died on a pre-modeset panel"
+_rc=0; run check >"$T/out" 2>&1 || _rc=$?
+[ "$_rc" = 0 ] || fail "check exited $_rc on a pre-modeset panel (want 0)"
+grep -q '^== bootique' "$T/out" \
+  || fail "check printed no header on a pre-modeset panel"
+grep -q '\[OK\]' "$T/out" || fail "check printed no marker at all"
+# ...and the value it could not read is simply ABSENT from the drop-in, which
+# is the designed outcome: place_dropin omits GRUB_GFXMODE when it is empty.
+grep -q '^GRUB_GFXMODE=' "$BDROP" \
+  && fail "a panel with no modes still wrote a GRUB_GFXMODE line"
+# A panel that DOES answer is still read, so the fix did not just mute it.
+printf '2880x1800\n1920x1200\n' > "$T/drm-premodeset/card0-eDP-1/modes"
+run install >/dev/null 2>&1 || fail "install failed once the panel answered"
+grep -q '^GRUB_GFXMODE=2880x1800,auto' "$BDROP" \
+  || fail "the panel's native mode did not reach the drop-in"
+DRM=$T/drm-empty; GFX=1440x900
+run install >/dev/null 2>&1 || fail "install broken after the panel probe"
+
+# --- a leaked non-zero status is NAMED, never a silent exit ------------------
+# The backstop for the CLASS the bug above belongs to. Under `set -eu` any
+# unguarded non-zero status kills setup.sh where it stands, printing whatever
+# it had so far and nothing more, so the next instance must say so itself
+# rather than cost another VM gate run to find. Planted in a COPY, so the real
+# script is never edited to test it.
+mkdir -p "$T/leakrepo/plymouth" "$T/leakrepo/grub"
+cp "$HERE/background.png" "$T/leakrepo/"
+cp "$HERE"/plymouth/* "$T/leakrepo/plymouth/"
+cp "$HERE"/grub/* "$T/leakrepo/grub/"
+# Planted AFTER the trap is armed, since the point is to prove the trap
+# speaks; a leak before it would be the silent exit the trap exists to end.
+# shellcheck disable=SC2016  # `$_x` is literal ON PURPOSE: this string is
+# code for the GENERATED script, not for this one.
+_lk='_leak() { for _x in a b; do [ "$_x" = zzz ] && return 0; done; }'
+awk -v L="$_lk" '/^BS_DRM_ROOT=/ && !_d { print L; print "_LEAKED=$(_leak)"
+                                          _d = 1 }
+                 { print }' "$HERE/setup.sh" > "$T/leakrepo/setup.sh"
+SCRIPT="$T/leakrepo/setup.sh"
+_rc=0; run check >"$T/out" 2>&1 || _rc=$?
+[ "$_rc" = 1 ] || fail "a leaked status exited $_rc; the contract is 0 or 1"
+grep -q 'ABORTED in stage' "$T/out" \
+  || fail "a leaked status exited without naming itself"
+grep -q "NOT drift on this box" "$T/out" \
+  || fail "the abort did not say it is a bug rather than drift"
+SCRIPT=
+run check >/dev/null 2>&1 || fail "check broken after the leak probe"
 
 pass "install + idempotent + check + KMS shapes + revert + uninstall"
