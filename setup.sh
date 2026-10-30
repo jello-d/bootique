@@ -399,6 +399,13 @@ BS_HOOK_DST=${BS_HOOK_DST:-/etc/initramfs-tools/hooks/bootique-kms}
 # auto|local|remote, resolved by _load_mode below and BAKED into the
 # installed theme, because the plymouth script language can read no file and no
 # kernel cmdline: install time is the only place a per-box fact can enter.
+# The systemd drop-in that closes the plymouth-to-greeter race (see
+# _quitwait_conf). Overridable so the test can drive it against a scratch tree.
+_qwd=/etc/systemd/system/plymouth-quit-wait.service.d
+BS_QUITWAIT_DROPIN=${BS_QUITWAIT_DROPIN:-$_qwd/10-bootique-wait-exit.conf}
+SYSTEMCTL=${SYSTEMCTL:-systemctl}
+NEED_DAEMON_RELOAD=
+
 BS_UNLOCK_MODE=${BS_UNLOCK_MODE:-auto}
 BS_MODE_FILE=${BS_MODE_FILE:-/etc/bootique/unlock-mode}
 BS_CLEVIS_BIN=${BS_CLEVIS_BIN:-clevis}
@@ -571,6 +578,79 @@ place_dropin() {
   fi
   rm -f "$_tmp"
 }
+# The drop-in that makes `plymouth-quit-wait` mean what its Description says.
+# MEASURED on this fleet: that unit runs `plymouth --wait`, which is a CLIENT
+# and returns when the daemon ACKNOWLEDGES the quit, not when the process is
+# gone. So it finished 37ms before plymouthd exited on one boot and 200ms
+# before on another, and `greetd.service` is `After=` exactly that unit, so
+# systemd releases the greeter into that window to race a dying plymouthd for
+# the console. The head start tracked the outcome: 32ms and the greeter came
+# up, 192ms and the box came up with NO login screen, reachable only by ssh.
+#
+# MainPID is the signal because it is the only one TRUE IN BOTH STATES: it
+# reads 0 exactly when the process is gone. `/run/plymouth/pid` is already
+# absent after a crash, so waiting on that file protects nothing.
+#
+# `$$` is how a unit file spells a literal `$` for the shell it launches;
+# verified by parsing a probe unit and reading back what it ran.
+#
+# THREE ANSWERS, THREE BEHAVIOURS, because they mean different things and two
+# of them are not "keep waiting": a PID means plymouthd is alive, so hold; `0`
+# means it is gone, so go; and EMPTY means the question could not be asked at
+# all, so go rather than add the full 10s cap to a boot where systemctl or the
+# bus is broken. Note `systemctl show` answers `0` for a unit the manager does
+# not know, so an absent plymouth-start reads as gone, which is correct.
+_quitwait_conf() {
+  # A QUOTED heredoc, so every character below is literal: no shell expansion,
+  # no escaping to get wrong, and the text reads as the file it becomes. The
+  # `$$` are for SYSTEMD to turn into `$` for the shell it launches, which is
+  # exactly why this must not be expanded here.
+  cat <<'EOF'
+# bootique: hold the boot until plymouthd has actually EXITED.
+#
+# plymouth --wait is a CLIENT and returns when the daemon acknowledges the
+# quit, not when it is gone, so this unit used to finish with plymouthd still
+# alive and anything ordered After= it raced a dying process for the console.
+# Bounded at 10s and then PROCEEDS anyway: a box that never greets is worse
+# than one that sometimes races.
+#
+# Remove this file and run `systemctl daemon-reload` to revert.
+[Service]
+ExecStartPost=/bin/sh -c 'i=0; while [ "$$i" -lt 200 ]; do \
+  p=$$(systemctl show -p MainPID --value plymouth-start.service) \
+    || p=; \
+  [ -z "$$p" ] && exit 0; \
+  [ "$$p" = 0 ] && exit 0; \
+  i=$$((i+1)); sleep 0.05; done; exit 0'
+EOF
+}
+
+place_quitwait() {
+  _tmp=$(mktemp)
+  _quitwait_conf > "$_tmp"
+  if cmp -s "$_tmp" "$BS_QUITWAIT_DROPIN" 2>/dev/null; then
+    echo "$PKG: plymouth-quit-wait drop-in current"
+  else
+    sudo install -D -m 0644 -o root -g root "$_tmp" "$BS_QUITWAIT_DROPIN"
+    echo "$PKG: wrote plymouth-quit-wait drop-in (hold for plymouthd exit)"
+    NEED_DAEMON_RELOAD=1
+  fi
+  rm -f "$_tmp"
+}
+
+# A systemd drop-in is read when the unit is loaded, so a change needs a
+# reload to be live THIS boot. Absent systemctl is a NOTE, not a failure: the
+# file is still read at the next boot, which is the only boot it affects.
+_reload_systemd() {
+  [ -n "$NEED_DAEMON_RELOAD" ] || return 0
+  if ! command -v "$SYSTEMCTL" >/dev/null 2>&1; then
+    echo "$PKG: $SYSTEMCTL absent; the drop-in applies at the next boot" >&2
+    return 0
+  fi
+  sudo "$SYSTEMCTL" daemon-reload
+  echo "$PKG: reloaded systemd units"
+}
+
 _gpu_driver() {
   [ -n "${BS_GPU_DRIVER+x}" ] && { printf '%s' "$BS_GPU_DRIVER"; return 0; }
   for _d in "$BS_DRM_ROOT"/card*/device/driver; do
@@ -640,6 +720,7 @@ plymouth_install() {
   place_theme
   select_theme
   place_dropin
+  place_quitwait
   place_kms
 }
 
@@ -679,8 +760,26 @@ EOF
   # Everything root reads: the theme plymouthd interprets as root, the splash
   # cmdline drop-in grub-mkconfig sources, and whichever early-KMS mechanism
   # this box uses (the dracut conf is SOURCED as shell; the hook is EXECUTED).
+  _qw=$(mktemp)
+  _quitwait_conf > "$_qw"
+  _same "$_qw" "$BS_QUITWAIT_DROPIN" \
+    "plymouth-quit-wait drop-in current (holds for plymouthd exit)" \
+    "plymouth-quit-wait drop-in missing or stale (install)"
+  rm -f "$_qw"
+  _plymouth_root_check
+  return 0
+}
+
+# The splash half's PRIVILEGE assertions, split out of plymouth_check both to
+# keep it under the 50-line rule and because they ask a different question:
+# not "is the content current" but "is what ROOT reads safe, and is the copy
+# that actually BOOTS current". plymouthd interprets the theme as root,
+# grub-mkconfig sources the cmdline drop-in, systemd reads the quit-wait
+# drop-in, dracut SOURCES the KMS conf and initramfs-tools EXECUTES the hook.
+_plymouth_root_check() {
   _own_ok "$BS_THEMEDIR/bootique.script" "plymouth theme script"
   _own_ok "$BS_DROPIN" "splash cmdline drop-in"
+  _own_ok "$BS_QUITWAIT_DROPIN" "plymouth-quit-wait drop-in"
   if _uses_dracut; then _own_ok "$BS_DRACUT_CONF" "dracut early-KMS conf"
   else _own_ok "$BS_HOOK_DST" "early-KMS initramfs hook"; fi
   _STAGE='initramfs freshness'
@@ -832,6 +931,7 @@ do_install() {
   else echo "$PKG: plymouth absent; skipping the boot splash"; fi
   [ -n "$_did" ] || { echo "$PKG: neither grub nor plymouth here; nothing"
                       return 0; }
+  _reload_systemd
   regen
   # A rebuild that lost another owner's payload exits NON-ZERO: the cosmetics
   # installed fine, but the box's boot may no longer be able to unlock itself,
@@ -842,9 +942,15 @@ do_install() {
 }
 
 do_uninstall() {
-  for _f in "$GRUB_DROPIN_DST" "$BS_DROPIN" "$BS_DRACUT_CONF" "$BS_HOOK_DST"; do
-    [ -e "$_f" ] && { sudo rm -f "$_f"; echo "$PKG: removed $_f"; }
+  for _f in "$GRUB_DROPIN_DST" "$BS_DROPIN" "$BS_DRACUT_CONF" \
+            "$BS_HOOK_DST" "$BS_QUITWAIT_DROPIN"; do
+    [ -e "$_f" ] && { sudo rm -f "$_f"; echo "$PKG: removed $_f"
+                      NEED_DAEMON_RELOAD=1; }
   done
+  # Leave no empty .d behind. rmdir only ever removes an EMPTY directory, so
+  # it cannot take anything else's drop-in with it.
+  _qwdir=$(dirname "$BS_QUITWAIT_DROPIN")
+  [ -d "$_qwdir" ] && sudo rmdir "$_qwdir" 2>/dev/null || :
   revert_quiet_boot
   _has_plymouth && _alt_is_bootique && {
     sudo "$UPDATE_ALTERNATIVES" --remove "$BS_ALT_NAME" "$_alt_target" \
@@ -854,6 +960,7 @@ do_uninstall() {
   [ -d "$BS_THEMEDIR" ] && { sudo rm -rf "$BS_THEMEDIR"
                             echo "$PKG: removed $BS_THEMEDIR"; }
   NEED_GRUB=1 NEED_INITRAMFS=1
+  _reload_systemd
   regen
   echo "$PKG: uninstalled (reverts to a plain boot on the next rebuild)."
 }

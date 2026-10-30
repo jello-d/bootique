@@ -143,6 +143,15 @@ LSFS=lsinitramfs; LSRD=absent-lsinitrd
 # Pinned too, so a test can make the generator ABSENT by name rather
 # than by moving a stub and hoping the host has no real one.
 UPD=update-initramfs
+# systemd is only ever asked to RELOAD here, so the stub records the calls and
+# a test can assert the reload happened exactly when the drop-in changed.
+SCTL_LOG=$T/systemctl.calls
+cat > "$T/sbin/systemctl" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$SCTL_LOG"
+EOF
+chmod 755 "$T/sbin/systemctl"
+QWDROP=$T/etc/systemd/system/plymouth-quit-wait.service.d/10-bootique.conf
 # The DRM tree the panel readers look at. Pinned to a scratch dir so the suite
 # can never read the HOST's connectors, and so a test can PLANT a connector
 # state. GFX empty means "do not pass BS_GFXMODE", which is what makes
@@ -155,7 +164,7 @@ run() {
     BS_UNLOCK_MODE="$UMODE" BS_CLEVIS_BIN="$CLEVIS_BIN" \
     BS_MODE_FILE="$MODEFILE" BS_DRACUT_MODDIR="$DMODS" \
     BS_INITRD_DIR="$T/boot" LSINITRAMFS="$LSFS" LSINITRD="$LSRD" \
-    UPDATE_INITRAMFS="$UPD" \
+    UPDATE_INITRAMFS="$UPD" BS_QUITWAIT_DROPIN="$QWDROP" \
     GRUB_ASSETDIR="$GAD" GRUB_BG_DST="$GAD/background.png" \
     GRUB_THEME_DST="$GAD/theme.txt" GRUB_DROPIN_DST="$GDROP" \
     GRUB_SELECT_STAMP="$GAD/.sel.bg" GRUB_FRAME_STAMP="$GAD/.frame.spec" \
@@ -604,5 +613,83 @@ grep -q "NOT drift on this box" "$T/out" \
   || fail "the abort did not say it is a bug rather than drift"
 SCRIPT=
 run check >/dev/null 2>&1 || fail "check broken after the leak probe"
+
+# --- the plymouth-quit-wait drop-in that closes the greeter race ------------
+# WHY IT EXISTS: `plymouth --wait` is a CLIENT, so plymouth-quit-wait finishes
+# while plymouthd is still alive, and anything ordered After= it (greetd) is
+# released into that window to race a dying process for the console. Measured
+# on manifestor: 32ms of head start and the greeter came up, 192ms and the box
+# came up with NO login screen.
+# TRUNCATE FIRST: the stub log is cumulative over the whole file, and every
+# earlier install and uninstall has already written a daemon-reload into it,
+# so asserting against it unzeroed passes whatever this install does.
+rm -f "$QWDROP"; : > "$SCTL_LOG"
+run install >/dev/null 2>&1 || fail "install failed placing the drop-in"
+[ -f "$QWDROP" ] || fail "install did not place the quit-wait drop-in"
+grep -q '^\[Service\]' "$QWDROP" || fail "the drop-in has no [Service] section"
+grep -q 'MainPID' "$QWDROP" \
+  || fail "the drop-in does not wait on plymouth-start's MainPID"
+run check >/dev/null 2>&1 || fail "check drifted on the drop-in it just wrote"
+# systemd reads a drop-in when the unit LOADS, so a change needs a reload to be
+# live on THIS boot; an unchanged run must not reload (noise, and it would
+# make the install non-idempotent in its output).
+grep -q 'daemon-reload' "$SCTL_LOG" || fail "install never reloaded systemd"
+: > "$SCTL_LOG"
+run install >/dev/null 2>&1 || fail "second install failed"
+[ -s "$SCTL_LOG" ] && fail "an unchanged drop-in still reloaded systemd"
+
+# DRIFT: a hand-edited drop-in must be reported, not passed over.
+printf '[Service]\nExecStartPost=/bin/true\n' > "$QWDROP"
+run check >/dev/null 2>&1 && fail "check passed on a mangled drop-in"
+run install >/dev/null 2>&1 || fail "install failed restoring the drop-in"
+run check >/dev/null 2>&1 || fail "check still unhappy after the restore"
+
+# --- the drop-in's OWN shell logic, all three answers ----------------------
+# Extracted from the file install actually wrote, not retyped: the three
+# answers mean different things and two of them are NOT "keep waiting".
+_qwcmd=$T/qw.cmd
+awk '/^ExecStartPost=/,0' "$QWDROP" \
+  | sed -e ':a' -e '/\\$/{N;s/\\\n//;ba' -e '}' \
+  | sed -e "s|^ExecStartPost=/bin/sh -c '||" -e "s|'$||" -e 's/\$\$/$/g' \
+  > "$_qwcmd"
+# A reflowed generator must not silently yield an empty command, the same trap
+# the unlock_mode marker guard exists for.
+grep -q 'MainPID' "$_qwcmd" \
+  || fail "could not extract the drop-in's command; the generator reflowed?"
+_sb=$T/qwstub; mkdir -p "$_sb"
+_qwrun() { PATH="$_sb:$PATH" sh "$_qwcmd"; }
+# gone: MainPID 0, so proceed at once
+printf '#!/bin/sh\necho 0\n' > "$_sb/systemctl"; chmod 755 "$_sb/systemctl"
+_qwrun || fail "the wait did not exit 0 when plymouthd was already gone"
+# alive, then gone: it must LOOP rather than give up on the first answer
+cat > "$_sb/systemctl" <<EOF
+#!/bin/sh
+n=\$(cat "$_sb/n" 2>/dev/null || echo 0); n=\$((n+1)); echo "\$n" > "$_sb/n"
+[ "\$n" -le 2 ] && echo 4242 || echo 0
+EOF
+rm -f "$_sb/n"
+_qwrun || fail "the wait did not exit 0 once plymouthd went away"
+[ "$(cat "$_sb/n")" = 3 ] \
+  || fail "the wait did not poll while plymouthd was alive"
+# cannot ask: an empty answer must NOT hold the boot for the full cap.
+# ASSERTED BY CALL COUNT, not by exit status: the loop is fail-open, so it
+# exits 0 whether it gave up at once or burned the whole 10s cap, and a status
+# assertion here could not fail. One call means it asked and went.
+cat > "$_sb/systemctl" <<EOF
+#!/bin/sh
+n=\$(cat "$_sb/n" 2>/dev/null || echo 0); echo "\$((n+1))" > "$_sb/n"
+exit 1
+EOF
+rm -f "$_sb/n"
+_qwrun || fail "an unanswerable query did not exit 0"
+[ "$(cat "$_sb/n")" = 1 ] || fail "an unanswerable query polled
+  $(cat "$_sb/n") times; it must ask once and go"
+
+# --- uninstall takes the drop-in AND leaves no empty .d behind -------------
+run uninstall >/dev/null 2>&1 || fail "uninstall failed"
+[ -e "$QWDROP" ] && fail "uninstall left the quit-wait drop-in"
+[ -d "$(dirname "$QWDROP")" ] \
+  && fail "uninstall left an empty plymouth-quit-wait.service.d behind"
+run install >/dev/null 2>&1 || fail "install broken after the drop-in probes"
 
 pass "install + idempotent + check + KMS shapes + revert + uninstall"
