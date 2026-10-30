@@ -657,10 +657,15 @@ awk '/^ExecStartPost=/,0' "$QWDROP" \
 grep -q 'MainPID' "$_qwcmd" \
   || fail "could not extract the drop-in's command; the generator reflowed?"
 _sb=$T/qwstub; mkdir -p "$_sb"
-_qwrun() { PATH="$_sb:$PATH" sh "$_qwcmd"; }
+# Output CAPTURED, not shown: the hold reports what it did on every boot (there
+# is no other way to tell on a clean boot, where systemd logs nothing when
+# plymouthd exits normally), so each path's message is asserted here too.
+_qwrun() { PATH="$_sb:$PATH" sh "$_qwcmd" > "$T/qwout" 2>&1; }
 # gone: MainPID 0, so proceed at once
 printf '#!/bin/sh\necho 0\n' > "$_sb/systemctl"; chmod 755 "$_sb/systemctl"
 _qwrun || fail "the wait did not exit 0 when plymouthd was already gone"
+grep -q 'plymouthd gone after 0 polls' "$T/qwout" \
+  || fail "the wait did not report releasing the boot: $(cat "$T/qwout")"
 # alive, then gone: it must LOOP rather than give up on the first answer
 cat > "$_sb/systemctl" <<EOF
 #!/bin/sh
@@ -671,6 +676,8 @@ rm -f "$_sb/n"
 _qwrun || fail "the wait did not exit 0 once plymouthd went away"
 [ "$(cat "$_sb/n")" = 3 ] \
   || fail "the wait did not poll while plymouthd was alive"
+grep -q 'gone after 2 polls' "$T/qwout" \
+  || fail "the wait misreported how long it held: $(cat "$T/qwout")"
 # cannot ask: an empty answer must NOT hold the boot for the full cap.
 # ASSERTED BY CALL COUNT, not by exit status: the loop is fail-open, so it
 # exits 0 whether it gave up at once or burned the whole 10s cap, and a status
@@ -684,6 +691,8 @@ rm -f "$_sb/n"
 _qwrun || fail "an unanswerable query did not exit 0"
 [ "$(cat "$_sb/n")" = 1 ] || fail "an unanswerable query polled
   $(cat "$_sb/n") times; it must ask once and go"
+grep -q 'cannot read plymouth-start MainPID' "$T/qwout" \
+  || fail "an unanswerable query did not say so: $(cat "$T/qwout")"
 
 # --- uninstall takes the drop-in AND leaves no empty .d behind -------------
 run uninstall >/dev/null 2>&1 || fail "uninstall failed"

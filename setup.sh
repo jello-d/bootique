@@ -594,6 +594,12 @@ place_dropin() {
 # `$$` is how a unit file spells a literal `$` for the shell it launches;
 # verified by parsing a probe unit and reading back what it ran.
 #
+# IT REPORTS WHAT IT DID, ON EVERY BOOT, and that is not decoration: systemd
+# logs NOTHING when plymouthd exits normally (measured on three clean boots),
+# so without a line of its own there is no way to tell on a clean boot whether
+# the hold ran at all, let alone for how long. One line per path turns every
+# boot into evidence instead of costing a boot to find out.
+#
 # THREE ANSWERS, THREE BEHAVIOURS, because they mean different things and two
 # of them are not "keep waiting": a PID means plymouthd is alive, so hold; `0`
 # means it is gone, so go; and EMPTY means the question could not be asked at
@@ -619,9 +625,13 @@ _quitwait_conf() {
 ExecStartPost=/bin/sh -c 'i=0; while [ "$$i" -lt 200 ]; do \
   p=$$(systemctl show -p MainPID --value plymouth-start.service) \
     || p=; \
-  [ -z "$$p" ] && exit 0; \
-  [ "$$p" = 0 ] && exit 0; \
-  i=$$((i+1)); sleep 0.05; done; exit 0'
+  [ -z "$$p" ] && { echo "bootique: cannot read plymouth-start MainPID;" \
+    "not holding the boot"; exit 0; }; \
+  [ "$$p" = 0 ] && { echo "bootique: plymouthd gone after $$i polls of 50ms;" \
+    "releasing the boot"; exit 0; }; \
+  i=$$((i+1)); sleep 0.05; done; \
+  echo "bootique: plymouthd STILL running after 10s; proceeding anyway"; \
+  exit 0'
 EOF
 }
 
