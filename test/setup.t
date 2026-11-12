@@ -205,6 +205,21 @@ grep -q 'Regular 32' "$GAD/mono.pf2" \
 grep -q 'Bold 32' "$GAD/mono-bold.pf2" || fail "bold font ignored the file"
 # The whole point: check agrees WITHOUT being handed the size.
 run check >/dev/null 2>&1 || fail "check drifted against the size it installed"
+# AND THE THEME NAMES THAT SIZE. It was copied verbatim naming 24, so GRUB
+# looked up a font no .pf2 carried and fell back to the first one loaded, in
+# 30px rows that clipped 32px glyphs.
+grep -q '^  item_font = "DejaVu Sans Mono Regular 32"$' "$GAD/theme.txt" \
+  || fail "the theme does not name the 32px menu font it was made with"
+grep -q '^  font = "DejaVu Sans Mono Bold 32"$' "$GAD/theme.txt" \
+  || fail "the theme's labels do not name the 32px font"
+grep -q '^  item_height = 40$' "$GAD/theme.txt" \
+  || fail "the menu rows did not scale with the font (want 40 at 32px)"
+grep -q '@' "$GAD/theme.txt" && fail "the theme kept a placeholder" || :
+# A theme left at the old size is drift, not a pass.
+sed -i 's/Regular 32/Regular 24/' "$GAD/theme.txt"
+run check >/dev/null 2>&1 && fail "check passed a theme naming the wrong size"
+run install >/dev/null 2>&1 || fail "install failed repairing the theme"
+run check >/dev/null 2>&1 || fail "check dirty after the theme was repaired"
 
 # An explicit env still wins over the file (tests, one-offs).
 GRUB_FONT_SIZE=40 GRUB_LABEL_SIZE=40 run install >/dev/null 2>&1 \
@@ -222,7 +237,10 @@ run install >/dev/null 2>&1 || fail "install failed restoring the default"
 grep -q 'Regular 24' "$GAD/mono.pf2" || fail "no file must mean the default"
 [ -f "$GAD/sel_c.png" ] || fail "grub selection bar not generated"
 [ -f "$GAD/frame_c.png" ] || fail "grub menu frame not generated"
-cmp -s "$HERE/grub/theme.txt" "$GAD/theme.txt" || fail "grub theme not placed"
+# At the default the generated theme is byte-for-byte the one this repo
+# shipped before it became a template: a 24px box sees no change at all.
+cmp -s "$HERE/test/theme-24.expected" "$GAD/theme.txt" \
+  || fail "the default-size theme is not the pre-template theme"
 cmp -s "$HERE/grub/bootique.cfg" "$GDROP" || fail "grub drop-in not placed"
 grep -q '^quiet_boot="0"' "$L10" || fail "quiet_boot not flipped to 0"
 # plymouth side. bootique.script is GENERATED, not copied: with no clevis on

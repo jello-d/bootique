@@ -328,12 +328,35 @@ revert_quiet_boot() {
   fi
 }
 
+# _gen_theme <dst>: theme.txt with the sizes this box's fonts were made at.
+# THE THEME NAMES ITS FONTS BY SIZE, and it used to be copied verbatim naming
+# 24, so any other size (the integrator sizes the menu per panel) generated
+# .pf2 files nothing asked for: GRUB looks a font up by its full name and,
+# finding none, falls back to the first one loaded, while the fixed 30px rows
+# clipped the larger glyphs. Rows and padding scale from 30/8 at 24px.
+# Compared GENERATED, like _gen_script, so check judges the box against what
+# it should have.
+_gen_theme() {
+  _ih=$(( (GRUB_FONT_SIZE * 30 + 12) / 24 ))
+  _ip=$(( (GRUB_FONT_SIZE * 8 + 12) / 24 ))
+  sed -e "s/@FONT@/$GRUB_FONT_SIZE/g" -e "s/@LABEL@/$GRUB_LABEL_SIZE/g" \
+    -e "s/@ITEM_H@/$_ih/g" -e "s/@ITEM_PAD@/$_ip/g" "$_gtheme_src" > "$1"
+  # Fail loud: a placeholder left behind is a theme GRUB rejects outright.
+  if grep -q '@[A-Z_]*@' "$1"; then
+    echo "$PKG: grub theme has an unfilled placeholder" >&2
+    _reported=1; exit 1
+  fi
+}
+
 grub_install() {
   _place "$_bg_src" "$GRUB_BG_DST" 0644 "grub background"
   gen_fonts
   gen_bar
   gen_frame
-  _place "$_gtheme_src" "$GRUB_THEME_DST" 0644 "grub theme"
+  _gt=$(mktemp) || { echo "$PKG: mktemp failed" >&2; exit 1; }
+  _gen_theme "$_gt"
+  _place "$_gt" "$GRUB_THEME_DST" 0644 "grub theme"
+  rm -f "$_gt"
   _place "$_gdropin_src" "$GRUB_DROPIN_DST" 0644 "grub theme drop-in"
   manage_quiet_boot
 }
@@ -364,8 +387,11 @@ EOF
   else bad "grub selection bar missing or wrong colour (install)"; fi
   if _frame_ok; then ok "grub menu frame ($GRUB_FRAME_BG/${GRUB_FRAME_PX}px)"
   else bad "grub menu frame missing or wrong spec (install)"; fi
-  _same "$_gtheme_src" "$GRUB_THEME_DST" "grub theme current" \
+  _gt=$(mktemp) || { echo "$PKG: mktemp failed" >&2; exit 1; }
+  _gen_theme "$_gt"
+  _same "$_gt" "$GRUB_THEME_DST" "grub theme current" \
     "grub theme missing or stale (install)"
+  rm -f "$_gt"
   _same "$_gdropin_src" "$GRUB_DROPIN_DST" \
     "grub theme drop-in current (GRUB_THEME set)" \
     "grub theme drop-in missing or stale (install)"
