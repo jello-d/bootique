@@ -9,10 +9,11 @@ with a system installer*: its `setup.sh` installs to `/boot/grub/themes/
 bootique` and `/usr/share/plymouth/themes/bootique` (root, sudo) and rebuilds
 the initramfs + `grub.cfg`.
 
-- **GRUB menu theme**: a photo background, generated DejaVu Sans Mono fonts
-  (at the box's native-res boot), deep-purple menu text, a light-green selection
-  bar, and a purple frame near the screen edges. A real GRUB theme (not the
-  16-colour `menu_color` knob) so the colours are exact hex.
+- **GRUB menu theme**: a photo background, deep-purple menu text, a
+  light-green selection bar, and a purple frame near the screen edges. A real
+  GRUB theme (not the 16-colour `menu_color` knob) so the colours are exact
+  hex. The menu runs at 1024x768 so the panel scales it up: the font is GRUB's
+  built-in Unifont 16, because Secure Boot refuses every font file from disk.
 - **Plymouth boot splash**: a `script`-plugin theme: the forest photo, a green
   "unlock disk" pill with passphrase bullets, a three-state unlock prompt (see
   below), and a rolling boot-log. One theme serves boot and shutdown, branched
@@ -35,9 +36,8 @@ the initramfs + `grub.cfg`.
 settled box
 is a no-op and the initramfs/`grub.cfg` regenerate only on a change. It needs
 sudo for the system installs. Each missing dependency degrades with a note:
-`grub-mkfont` + ImageMagick `convert` (the GRUB fonts, selection bar, frame),
-the DejaVu Sans Mono TTFs, and Plymouth. A box without GRUB or without Plymouth
-simply skips that half.
+ImageMagick `convert` (the GRUB selection bar and frame) and Plymouth. A box
+without GRUB or without Plymouth simply skips that half.
 
 `uninstall` removes everything it placed. It also reverts the one file bootique
 edits but does not own (`/etc/grub.d/10_linux`), and *only* where a stamp
@@ -46,13 +46,14 @@ cannot tell its own change from your preference, so it leaves it alone.
 
 Tunables are environment variables read by `setup.sh`: the selection and frame
 colours, and every system path (the last so the test can drive it against a
-scratch tree). The GRUB menu font size is the exception, and deliberately so:
-it is read from `/etc/bootique/font-size` (precedence `GRUB_FONT_SIZE` env >
-file > 24px), because `check` is invoked with a bare environment by a
-provisioning layer, where an env-only override would be invisible and every
-audit would report drift it could not explain. The right size is a fraction of
-the panel, not a physical measurement, so a wider screen wants a larger number:
-24px was picked by eye at 2880 wide.
+scratch tree).
+
+There is no font setting. An earlier version generated DejaVu Sans Mono fonts
+and sized them per panel, but on a Secure Boot box the signed GRUB refuses
+every font file ("prohibited by secure boot policy"), so they never loaded and
+the menu always used the built-in Unifont. Install removes fonts an older
+version left, and the menu's size now comes from its resolution
+(`GRUB_GFXMODE` in `grub/bootique.cfg`).
 
 ## The unlock prompt
 

@@ -9,14 +9,15 @@
 #     vibrant green, the help line lavender.
 #   - item_spacing 0 so rows are adjacent (uniform, and the snapshot columns,
 #     box-drawing │, form a CONTIGUOUS vertical rule).
-#   - a TEMPLATE: setup.sh fills the at-sign placeholders at install with the
-#     .pf2 sizes it generates, rows/padding scaled from 30/8 at 24px. A font is
-#     looked up by NAME, size included, so a theme naming a size no .pf2 has
-#     falls back to whichever font loaded first. Percent geometry is
-#     resolution-independent; the loader picks up every .pf2 in this dir.
+#   - the font is GNU Unifont 16, the one built into the signed GRUB: Secure
+#     Boot refuses every font file from disk (see setup.sh), so it is the only
+#     font there is. The menu is made readable by RESOLUTION instead: the
+#     drop-in runs it at 1024x768, which the panel scales up. Rows are 20px
+#     (the original 30/24 proportion at 16px). Percent geometry is
+#     resolution-independent.
 desktop-image: "background.png"
 title-text: ""
-terminal-font: "DejaVu Sans Mono Regular @FONT@"
+terminal-font: "GNU Unifont Regular 16"
 # The console window for the boot messages ("Loading Linux .../initrd ..."):
 # with a theme, gfxmenu defaults it to a jarring CENTRED half-screen black box.
 # Full-screen makes selecting an entry read as a normal boot instead. NOTE:
@@ -34,13 +35,13 @@ terminal-height: "100%"
   width = 94%
   height = 90%
   menu_pixmap_style = "frame_*.png"
-  item_font = "DejaVu Sans Mono Regular @FONT@"
+  item_font = "GNU Unifont Regular 16"
   item_color = "#3F2470"
-  selected_item_font = "DejaVu Sans Mono Bold @FONT@"
+  selected_item_font = "GNU Unifont Regular 16"
   selected_item_color = "#3F2470"
   selected_item_pixmap_style = "sel_*.png"
-  item_height = @ITEM_H@
-  item_padding = @ITEM_PAD@
+  item_height = 20
+  item_padding = 5
   item_spacing = 0
 }
 
@@ -51,7 +52,7 @@ terminal-height: "100%"
   width = 94%
   align = "center"
   color = "#2BE04C"
-  font = "DejaVu Sans Mono Bold @LABEL@"
+  font = "GNU Unifont Regular 16"
   text = "Booting automatically in %d s"
 }
 
@@ -61,6 +62,6 @@ terminal-height: "100%"
   width = 94%
   align = "center"
   color = "#C3AEF5"
-  font = "DejaVu Sans Mono Regular @LABEL@"
+  font = "GNU Unifont Regular 16"
   text = "Arrow keys to select - Enter to boot - E to edit"
 }

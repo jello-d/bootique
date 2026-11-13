@@ -1,13 +1,14 @@
 #!/bin/sh
 # setup.t - stub-driven test for the bootique system installer. Sandboxes every
 # system path (both theme dirs, the drop-ins, grub.cfg, 10_linux, the KMS conf/
-# hook) and stubs sudo/install/tee/grub-mkfont/convert/grub-mkconfig/update-
+# hook) and stubs sudo/install/tee/convert/grub-mkconfig/update-
 # initramfs/update-alternatives, then asserts: install places the grub theme
-# (background, 4 weight+size fonts, 9-slice bar + frame, theme.txt, drop-in,
-# quiet_boot=0) AND the plymouth theme (7 files, the bootique alternative, the
-# splash drop-in, the dracut xe early-KMS conf) and regenerates BOTH the
+# (background, 9-slice bar + frame, theme.txt, the drop-in with the menu mode,
+# quiet_boot=0, NO fonts) AND the plymouth theme (7 files, the bootique
+# alternative, the splash drop-in, the dracut xe early-KMS conf) and
+# regenerates BOTH the
 # initramfs and grub.cfg; a second install is a no-op (no regen); check is clean
-# and drifts on a removed grub font, a removed plymouth file, a non-bootique
+# and drifts on a stale grub theme, a removed plymouth file, a non-bootique
 # alternative, and a missing splash drop-in; the initramfs-tools + non-xe KMS
 # shapes behave; uninstall removes the drop-ins + theme dirs. Reads the repo's
 # own theme sources; nothing on the box is touched.
@@ -20,10 +21,6 @@ mkdir -p "$T/sbin" "$T/boot/grub" "$T/etc/default/grub.d" "$T/etc/grub.d" \
   "$T/plymouth-themes"
 # scratch destinations
 GAD=$T/boot/grub/themes/bootique         # grub asset dir
-# Pinned into $T like BS_MODE_FILE, and for the same reason: unpinned, the
-# suite would read the DEVELOPER's /etc/bootique/font-size and a box that had
-# been sized for its panel would fail the 24px assertions below.
-FONTFILE=$T/font-size                    # absent => the built-in 24
 BTD=$T/plymouth-themes/bootique          # plymouth theme dir (parent exists)
 GDROP=$T/etc/default/grub.d/bootique.cfg
 BDROP=$T/etc/default/grub.d/splash.cfg
@@ -31,9 +28,6 @@ DCONF=$T/etc/dracut.conf.d/90-bootique-kms.conf
 HOOK=$T/etc/initramfs-tools/hooks/bootique-kms
 L10=$T/etc/grub.d/10_linux
 printf 'quiet_boot="1"\n' > "$L10"       # Ubuntu default, to be flipped to 0
-# stand-in TTFs (the grub-mkfont stub reads only the name for Regular vs Bold)
-TTF_REG=$T/DejaVuSansMono.ttf;       : > "$TTF_REG"
-TTF_BOLD=$T/DejaVuSansMono-Bold.ttf; : > "$TTF_BOLD"
 # fake firmware so the dracut conf's install_items has something to list
 FWROOT=$T/fw; mkdir -p "$FWROOT/i915" "$FWROOT/xe"
 : > "$FWROOT/i915/xe2lpd_dmc.bin.zst"; : > "$FWROOT/xe/lnl_guc_70.bin.zst"
@@ -54,16 +48,6 @@ done
 mkdir -p "$(dirname "$dst")"; cp "$src" "$dst"
 [ -n "$mode" ] && chmod "$mode" "$dst"
 exit 0
-EOF
-cat > "$T/sbin/grub-mkfont" <<'EOF'
-#!/bin/sh
-size=; out=; ttf=
-while [ $# -gt 0 ]; do
-  case "$1" in -s) size=$2; shift 2 ;; -o) out=$2; shift 2 ;; *) ttf=$1; shift
-  ;; esac
-done
-case "$ttf" in *Bold*) wt=Bold ;; *) wt=Regular ;; esac
-printf 'PFF2 DejaVu Sans Mono %s %s\n' "$wt" "$size" > "$out"
 EOF
 cat > "$T/sbin/convert" <<'EOF'
 #!/bin/sh
@@ -152,12 +136,9 @@ printf '%s\n' "\$*" >> "$SCTL_LOG"
 EOF
 chmod 755 "$T/sbin/systemctl"
 QWDROP=$T/etc/systemd/system/plymouth-quit-wait.service.d/10-bootique.conf
-# The DRM tree the panel readers look at. Pinned to a scratch dir so the suite
-# can never read the HOST's connectors, and so a test can PLANT a connector
-# state. GFX empty means "do not pass BS_GFXMODE", which is what makes
-# _native_mode run at all: with it pinned, the reader was never exercised.
+# The DRM tree _gpu_driver reads. Pinned to a scratch dir so the suite can
+# never read the HOST's connectors.
 DRM=$T/drm-empty; mkdir -p "$DRM"
-GFX=1440x900
 DMODS=$T/dracut-mods; mkdir -p "$DMODS"
 run() {
   env -i PATH="$T/sbin:/usr/bin:/bin" NO_COLOR=1 ALT_STATE="$ALT_STATE" \
@@ -168,12 +149,8 @@ run() {
     GRUB_ASSETDIR="$GAD" GRUB_BG_DST="$GAD/background.png" \
     GRUB_THEME_DST="$GAD/theme.txt" GRUB_DROPIN_DST="$GDROP" \
     GRUB_SELECT_STAMP="$GAD/.sel.bg" GRUB_FRAME_STAMP="$GAD/.frame.spec" \
-    GRUB_TTF_REG="$TTF_REG" GRUB_TTF_BOLD="$TTF_BOLD" GRUB_10LINUX="$L10" \
-    GRUB_CFG="$T/boot/grub/grub.cfg" GRUB_FONT_FILE="$FONTFILE" \
-    ${GRUB_FONT_SIZE:+GRUB_FONT_SIZE="$GRUB_FONT_SIZE"} \
-    ${GRUB_LABEL_SIZE:+GRUB_LABEL_SIZE="$GRUB_LABEL_SIZE"} \
+    GRUB_10LINUX="$L10" GRUB_CFG="$T/boot/grub/grub.cfg" \
     BS_THEMEDIR="$BTD" BS_DROPIN="$BDROP" BS_DRM_ROOT="$DRM" \
-    ${GFX:+BS_GFXMODE="$GFX"} \
     BS_OWNER="${OWNER:-$(id -un)}" \
     BS_USES_DRACUT="$USES_DRACUT" BS_GPU_DRIVER="$GPU" \
     BS_DRACUT_CONF="$DCONF" BS_FW_ROOT="$FWROOT" BS_HOOK_DST="$HOOK" \
@@ -184,63 +161,19 @@ run() {
 run install >/dev/null 2>&1 || fail "install exited non-zero"
 # grub side
 cmp -s "$HERE/background.png" "$GAD/background.png" || fail "grub bg not placed"
-for _f in mono.pf2 mono-bold.pf2 mono-sm.pf2 mono-sm-bold.pf2; do
-  [ -f "$GAD/$_f" ] || fail "grub font $_f not generated"
-done
-grep -q 'Bold 24' "$GAD/mono-bold.pf2" || fail "grub bold font wrong name"
-
-# --- the font size comes from a FILE, so a bare-env caller agrees ------------
-# THE BUG THIS PINS: the size was first plumbed as an env var an integrator
-# passed. `check` is run with a bare environment by more callers than anyone
-# counts: the consumer module, a human in the repo, and the pkg machinery's
-# installed-probe, so any caller that did not set it compared the live .pf2
-# against the DEFAULT and reported drift it could not explain. On a real box
-# the fonts were correctly regenerated at 32 and the sweep then said
-# `bootique: uninstalled`. Same precedence, and the same reasoning, as
-# BS_MODE_FILE: explicit env > persistent file > default.
-printf '32\n' > "$FONTFILE"
-run install >/dev/null 2>&1 || fail "install failed with a font-size file"
-grep -q 'Regular 32' "$GAD/mono.pf2" \
-  || fail "the font-size file did not reach grub-mkfont"
-grep -q 'Bold 32' "$GAD/mono-bold.pf2" || fail "bold font ignored the file"
-# The whole point: check agrees WITHOUT being handed the size.
-run check >/dev/null 2>&1 || fail "check drifted against the size it installed"
-# AND THE THEME NAMES THAT SIZE. It was copied verbatim naming 24, so GRUB
-# looked up a font no .pf2 carried and fell back to the first one loaded, in
-# 30px rows that clipped 32px glyphs.
-grep -q '^  item_font = "DejaVu Sans Mono Regular 32"$' "$GAD/theme.txt" \
-  || fail "the theme does not name the 32px menu font it was made with"
-grep -q '^  font = "DejaVu Sans Mono Bold 32"$' "$GAD/theme.txt" \
-  || fail "the theme's labels do not name the 32px font"
-grep -q '^  item_height = 40$' "$GAD/theme.txt" \
-  || fail "the menu rows did not scale with the font (want 40 at 32px)"
-grep -q '@' "$GAD/theme.txt" && fail "the theme kept a placeholder" || :
-# A theme left at the old size is drift, not a pass.
-sed -i 's/Regular 32/Regular 24/' "$GAD/theme.txt"
-run check >/dev/null 2>&1 && fail "check passed a theme naming the wrong size"
-run install >/dev/null 2>&1 || fail "install failed repairing the theme"
-run check >/dev/null 2>&1 || fail "check dirty after the theme was repaired"
-
-# An explicit env still wins over the file (tests, one-offs).
-GRUB_FONT_SIZE=40 GRUB_LABEL_SIZE=40 run install >/dev/null 2>&1 \
-  || fail "install failed with an explicit size"
-grep -q 'Regular 40' "$GAD/mono.pf2" || fail "env did not override the file"
-
-# Garbage in the file leaves the DEFAULT standing rather than handing
-# grub-mkfont a nonsense size.
-printf 'not-a-number\n' > "$FONTFILE"
-run install >/dev/null 2>&1 || fail "install failed on a garbage font-size"
-grep -q 'Regular 24' "$GAD/mono.pf2" \
-  || fail "a garbage font-size must fall back to the default"
-rm -f "$FONTFILE"
-run install >/dev/null 2>&1 || fail "install failed restoring the default"
-grep -q 'Regular 24' "$GAD/mono.pf2" || fail "no file must mean the default"
+# NO FONTS. Secure Boot refuses every font file from disk, so the theme uses
+# the signed GRUB's built-in Unifont and the menu is made readable by mode.
+ls "$GAD"/*.pf2 >/dev/null 2>&1 && fail "install generated fonts: $(ls "$GAD")"
+grep -q '^GRUB_GFXMODE="1024x768,auto"$' "$GDROP" \
+  || fail "the theme drop-in does not run the menu at 1024x768"
+grep -q '^GRUB_GFXMODE' "$BDROP" \
+  && fail "the splash drop-in still sets a mode; it is sourced AFTER the theme
+drop-in, so it would override the menu mode" || :
+grep -q 'Unifont Regular 16' "$GAD/theme.txt" \
+  || fail "the theme does not name GRUB's built-in font"
 [ -f "$GAD/sel_c.png" ] || fail "grub selection bar not generated"
 [ -f "$GAD/frame_c.png" ] || fail "grub menu frame not generated"
-# At the default the generated theme is byte-for-byte the one this repo
-# shipped before it became a template: a 24px box sees no change at all.
-cmp -s "$HERE/test/theme-24.expected" "$GAD/theme.txt" \
-  || fail "the default-size theme is not the pre-template theme"
+cmp -s "$HERE/grub/theme.txt" "$GAD/theme.txt" || fail "grub theme not placed"
 cmp -s "$HERE/grub/bootique.cfg" "$GDROP" || fail "grub drop-in not placed"
 grep -q '^quiet_boot="0"' "$L10" || fail "quiet_boot not flipped to 0"
 # plymouth side. bootique.script is GENERATED, not copied: with no clevis on
@@ -273,9 +206,28 @@ run install >/dev/null 2>&1 || fail "second install exited non-zero"
 
 # --- check: clean, then drift on each managed piece --------------------------
 run check >/dev/null 2>&1 || fail "check reported drift on a settled box"
-rm -f "$GAD/mono-bold.pf2"
-run check >/dev/null 2>&1 && fail "check passed with a grub font removed"
+printf 'stale\n' >> "$GAD/theme.txt"
+run check >/dev/null 2>&1 && fail "check passed with a stale grub theme"
 run install >/dev/null 2>&1
+# FONTS AN OLDER INSTALL LEFT are drift: grub-mkconfig emits a loadfont for
+# every .pf2 in the theme dir, each refused under Secure Boot. install removes
+# them BY NAME and regenerates grub.cfg; anything else there is left alone.
+for _f in mono.pf2 mono-bold.pf2 mono-sm.pf2 mono-sm-bold.pf2; do
+  printf 'PFF2\n' > "$GAD/$_f"
+done
+printf 'mine\n' > "$GAD/other.pf2"
+_o=$(run check 2>&1) && fail "check passed with an old install's fonts" || :
+printf '%s\n' "$_o" | grep -q 'theme fonts left from an older install' \
+  || fail "check did not name the leftover fonts: $_o"
+rm -f "$GMARK"
+run install >/dev/null 2>&1 || fail "install failed removing old fonts"
+for _f in mono.pf2 mono-bold.pf2 mono-sm.pf2 mono-sm-bold.pf2; do
+  [ -e "$GAD/$_f" ] && fail "install left the old font $_f"
+done
+[ -e "$GAD/other.pf2" ] || fail "install removed a font it did not make"
+rm -f "$GAD/other.pf2"
+[ -f "$GMARK" ] || fail "removing fonts did not regenerate grub.cfg"
+run check >/dev/null 2>&1 || fail "check dirty after the old fonts went"
 rm -f "$BTD/bootique.script"
 run check >/dev/null 2>&1 && fail "check passed with a plymouth file removed"
 run install >/dev/null 2>&1
@@ -551,58 +503,6 @@ run uninstall >/dev/null 2>&1 || fail "a second uninstall exited non-zero"
 [ -d "$GAD" ] && fail "a second uninstall resurrected the grub theme dir"
 [ -d "$BTD" ] && fail "a second uninstall resurrected the plymouth theme dir"
 run install >/dev/null 2>&1 || fail "install broken after the double uninstall"
-
-# --- a font size that is NUMERIC but out of range falls back ------------------
-# The garbage case above covers the non-numeric branch; this covers the range
-# check, which is a separate line and was never exercised. 4px is unreadable
-# and 9999px would hand grub-mkfont something it cannot do, so both must leave
-# the default standing rather than be trusted.
-for _px in 4 9999; do
-  printf '%s\n' "$_px" > "$FONTFILE"
-  run install >/dev/null 2>&1 || fail "install failed on font-size $_px"
-  grep -q 'Regular 24' "$GAD/mono.pf2" \
-    || fail "an out-of-range font size ($_px) was not rejected"
-done
-# ...and the bounds themselves are INCLUSIVE, which is the other half of a
-# range check and the half that is usually off by one.
-for _px in 8 128; do
-  printf '%s\n' "$_px" > "$FONTFILE"
-  run install >/dev/null 2>&1 || fail "install failed on font-size $_px"
-  grep -q "Regular $_px" "$GAD/mono.pf2" \
-    || fail "font size $_px is in range and must be honoured"
-done
-rm -f "$FONTFILE"
-
-# --- a connected panel with no modes YET must not kill the check -------------
-# THE BUG THIS PINS, tackup request B1: `_native_mode` fell off a FAILING
-# `[ -s "$_md" ]` test, the assignment that defaults BS_GFXMODE from it took
-# that status, and `set -e` killed setup.sh AT THAT ASSIGNMENT. So `check`
-# exited 1 having printed NOTHING AT ALL, not even its header, and an
-# integrator reads that as a crash (tackup) or as drift with nothing under it.
-# A connector that reads `connected` while its `modes` is still empty is every
-# freshly provisioned box before its first reboot, which is exactly when it was
-# seen and why rebooting "fixed" it.
-mkdir -p "$T/drm-premodeset/card0-eDP-1"
-printf 'connected\n' > "$T/drm-premodeset/card0-eDP-1/status"
-: > "$T/drm-premodeset/card0-eDP-1/modes"      # connected, not yet probed
-DRM=$T/drm-premodeset; GFX=
-run install >/dev/null 2>&1 || fail "install died on a pre-modeset panel"
-_rc=0; run check >"$T/out" 2>&1 || _rc=$?
-[ "$_rc" = 0 ] || fail "check exited $_rc on a pre-modeset panel (want 0)"
-grep -q '^== bootique' "$T/out" \
-  || fail "check printed no header on a pre-modeset panel"
-grep -q '\[OK\]' "$T/out" || fail "check printed no marker at all"
-# ...and the value it could not read is simply ABSENT from the drop-in, which
-# is the designed outcome: place_dropin omits GRUB_GFXMODE when it is empty.
-grep -q '^GRUB_GFXMODE=' "$BDROP" \
-  && fail "a panel with no modes still wrote a GRUB_GFXMODE line"
-# A panel that DOES answer is still read, so the fix did not just mute it.
-printf '2880x1800\n1920x1200\n' > "$T/drm-premodeset/card0-eDP-1/modes"
-run install >/dev/null 2>&1 || fail "install failed once the panel answered"
-grep -q '^GRUB_GFXMODE=2880x1800,auto' "$BDROP" \
-  || fail "the panel's native mode did not reach the drop-in"
-DRM=$T/drm-empty; GFX=1440x900
-run install >/dev/null 2>&1 || fail "install broken after the panel probe"
 
 # --- a leaked non-zero status is NAMED, never a silent exit ------------------
 # The backstop for the CLASS the bug above belongs to. Under `set -eu` any

@@ -21,12 +21,13 @@ with sudo and rebuilds the initramfs and
 The install is idempotent: every piece is cmp/size/stamp-gated, so a settled box
 is a no-op and the initramfs and grub.cfg regenerate only when something
 changed. A box lacking GRUB or lacking Plymouth skips that half; a missing
-optional dependency (grub-mkfont, ImageMagick, a TTF) degrades with a note.
+optional dependency (ImageMagick) degrades with a note.
 .SH COMMANDS
 .TP
 .B install
-Place the GRUB theme (background, generated fonts, the selection bar + frame,
-theme.txt, the GRUB_THEME drop-in, quiet_boot) and the Plymouth theme (the theme
+Place the GRUB theme (background, the selection bar + frame, theme.txt, the
+GRUB_THEME and menu-mode drop-in, quiet_boot; fonts an older version generated
+are removed) and the Plymouth theme (the theme
 files, the default.plymouth alternative, the quiet-splash drop-in, early-KMS),
 then regenerate the initramfs and grub.cfg as needed.
 .TP
@@ -106,14 +107,16 @@ via
 .SH FILES
 .TP
 .I /boot/grub/themes/bootique/
-The installed GRUB theme (background, *.pf2 fonts, sel_*/frame_* slices,
-theme.txt).
+The installed GRUB theme (background, sel_*/frame_* slices, theme.txt). It
+holds no fonts: under Secure Boot the signed GRUB refuses font files, so the
+theme uses its built-in Unifont 16.
 .TP
 .I /usr/share/plymouth/themes/bootique/
 The installed Plymouth theme (bootique.plymouth, bootique.script, the PNGs).
 .TP
 .I /etc/default/grub.d/{bootique,splash}.cfg
-The GRUB_THEME and quiet-splash drop-ins.
+The GRUB_THEME + menu mode (GRUB_GFXMODE=1024x768,auto) and quiet-splash
+drop-ins.
 .TP
 .I /etc/dracut.conf.d/90-bootique-kms.conf
 The early-KMS drop-in on a dracut box (the driver and its firmware). Removed
@@ -130,18 +133,6 @@ or
 .BR remote .
 Written by an operator or a provisioning layer; bootique reads it and never
 creates or removes it.
-.TP
-.I /etc/bootique/font-size
-Optional GRUB menu font size in pixels, one number. Precedence is
-.B GRUB_FONT_SIZE
-in the environment, then this file, then 24. It is a FILE rather than an
-environment variable alone because
-.B check
-is invoked with a bare environment by a provisioning layer, where an env-only
-override would be invisible and every audit would report drift it could not
-explain. Size by fraction of the panel, not by physical measurement: 24px was
-picked by eye at 2880 pixels wide. Like the unlock-mode file, bootique reads it
-and never creates or removes it.
 .SH SEE ALSO
 .BR plymouth (8),
 .BR grub-mkconfig (8),

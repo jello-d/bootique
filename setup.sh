@@ -17,10 +17,10 @@
 # Every system path is overridable (the in-repo test drives it against a scratch
 # tree with a stubbed sudo). The one per-box BEHAVIOUR knob is the unlock
 # prompt's mode (BS_UNLOCK_MODE / /etc/bootique/unlock-mode, autodetected by
-# default; see _load_mode). Deps: grub-mkfont + ImageMagick `convert` (grub
-# theme), DejaVu Sans Mono TTFs, plymouth; each missing piece degrades with a
-# note. NOT fused with the remote-unlock mechanism (a separate, boot-critical
-# owner); its dracut drop-ins just compose with this one's via update-initramfs.
+# default; see _load_mode). Deps: ImageMagick `convert` (grub theme),
+# plymouth; each missing piece degrades with a note. NOT fused with the
+# remote-unlock mechanism (a separate, boot-critical owner); its dracut
+# drop-ins just compose with this one's via update-initramfs.
 set -eu
 
 PKG=bootique
@@ -48,8 +48,9 @@ warn() { printf '  %s[WARN]%s %s\n' "$_Y" "$_O" "$1"; }
 # a function falling off a failing test, or an assignment taking the status of a
 # failing command substitution. An integrator then reads exit 1 with no [FAIL]
 # and no message, which tackup's driver classifies as a crash and which before
-# that read as drift with nothing under it. One real instance is fixed in
-# `_native_mode`; this is the backstop for the CLASS, so the next one names
+# that read as drift with nothing under it. One real instance was fixed in
+# `_native_mode` (since removed); this is the backstop for the CLASS, so the
+# next one names
 # itself here rather than costing another 70-minute VM gate run to locate.
 #
 # Armed before the first system read, because the instance that bit was a
@@ -130,42 +131,23 @@ _bg_src="$_root/background.png"
 # =========================== GRUB menu theme ================================
 # A GRUB THEME (not the 16-colour menu_color knob) so colours are exact hex:
 # deep-purple menu text, a light-green selection bar, a purple frame near the
-# screen edges, light labels over the dark foliage. Fonts are GENERATED on the
-# box (grub-mkfont from DejaVu Sans Mono), the bar + frame with ImageMagick.
-# --- menu font size: explicit env > persistent file > default ----------------
-# The same precedence, and for the same reason, as BS_UNLOCK_MODE below: a
-# provisioning layer's choice lands in a FILE, never in an env var it must
-# remember to pass. `check` is invoked with a bare environment by integrators,
-# and by more of them than anyone counts: this package's check is run by its
-# own consumer module, by a human standing in the repo, AND by the pkg
-# machinery's installed-probe. An env-only override is invisible to any caller
-# that does not set it, so the audit compares the live .pf2 against the DEFAULT
-# and reports drift it cannot explain. That happened: fonts correctly
-# regenerated at 32, and the sweep then reported `bootique: uninstalled`.
+# screen edges, light labels over the dark foliage; the bar + frame are made
+# with ImageMagick.
 #
-# WHY IT IS A PER-BOX FACT AT ALL. GRUB renders at the firmware's preferred
-# (native) mode and these fonts are a fixed PIXEL size, so one size is a
-# different fraction of the screen on every panel: 24px is 0.83% of a 2880-wide
-# framebuffer and 0.63% of a 3840-wide one. Density is irrelevant, because a
-# higher-dpi panel with FEWER pixels shows the LARGER-looking menu. Which size
-# suits a box is a question about its panel, which this package has no business
-# probing; the integrator decides and writes it here.
-GRUB_FONT_FILE=${GRUB_FONT_FILE:-/etc/bootique/font-size}
-_font_file_px() {
-  [ -r "$GRUB_FONT_FILE" ] || return 0
-  _v=$(head -n1 "$GRUB_FONT_FILE" 2>/dev/null | tr -d ' \t\r')
-  # Validated, not trusted: a stray line leaves the default standing rather
-  # than handing grub-mkfont a garbage size.
-  case ${_v:-} in ''|*[!0-9]*) return 0 ;; esac
-  [ "$_v" -ge 8 ] && [ "$_v" -le 128 ] || return 0
-  printf '%s' "$_v"
-}
-_font_px=$(_font_file_px)
-GRUB_FONT_SIZE=${GRUB_FONT_SIZE:-${_font_px:-24}}    # menu items
-GRUB_LABEL_SIZE=${GRUB_LABEL_SIZE:-${_font_px:-24}}  # timeout + help labels
-_dj=/usr/share/fonts/truetype/dejavu
-GRUB_TTF_REG=${GRUB_TTF_REG:-$_dj/DejaVuSansMono.ttf}
-GRUB_TTF_BOLD=${GRUB_TTF_BOLD:-$_dj/DejaVuSansMono-Bold.ttf}
+# THE FONT IS THE ONE INSIDE THE SIGNED GRUB, Unifont 16, and the menu is made
+# readable by RESOLUTION instead (GRUB_GFXMODE=1024x768 in grub/bootique.cfg),
+# because nothing else can be made to work on a Secure Boot box. Its signed
+# grubx64.efi lets only an allow-list of file types through unverified
+# (grub-core/kern/efi/sb.c: config, theme, images and friends) and FONT is not
+# on it, nor is there any verified type for one, so every .pf2 this package
+# generated was refused "prohibited by secure boot policy" at boot and the menu
+# fell back to the built-in Unifont. MEASURED on dragonfly 2026-11-12: `lsfonts`
+# at the real GRUB console listed only "GNU Unifont Regular 16" while the
+# theme, frame and rows all applied, and a VM with shim + the signed GRUB +
+# OVMF's enforced Secure Boot reproduces the refusal exactly. So the generated
+# fonts were a cost with no effect, and every size ever judged "right" here was
+# judged on Unifont. They are gone; prune_fonts removes ones an older install
+# left, since grub-mkconfig emits a loadfont for every .pf2 it finds.
 # The selection bar colour (one flat green). 1px slice: gfxmenu draws the styled
 # box at item_height + 2*slice, so a fat slice bleeds into neighbour rows.
 GRUB_SELECT_BG=${GRUB_SELECT_BG:-#CBEBA6}
@@ -187,23 +169,12 @@ GRUB_MKCONFIG=${GRUB_MKCONFIG:-grub-mkconfig}
 # "Loading Linux ..." echoes on the default entry; on a long-POST box that reads
 # as HUNG before plymouth appears. quiet_boot="0" restores them.
 GRUB_10LINUX=${GRUB_10LINUX:-/etc/grub.d/10_linux}
-GRUB_MKFONT=${GRUB_MKFONT:-grub-mkfont}
 IM_CONVERT=${IM_CONVERT:-convert}
 _gtheme_src="$_root/grub/theme.txt"
 _gdropin_src="$_root/grub/bootique.cfg"
 
-# The four menu fonts: "basename ttf-var weight size". A .pf2 embeds
-# "<weight> <size>" in its name, so the artifact says what it is (no stamp).
-_fonts() {
-  printf '%s\n' \
-    "mono.pf2 $GRUB_TTF_REG Regular $GRUB_FONT_SIZE" \
-    "mono-bold.pf2 $GRUB_TTF_BOLD Bold $GRUB_FONT_SIZE" \
-    "mono-sm.pf2 $GRUB_TTF_REG Regular $GRUB_LABEL_SIZE" \
-    "mono-sm-bold.pf2 $GRUB_TTF_BOLD Bold $GRUB_LABEL_SIZE"
-}
 _sel_slices() { echo c n s e w nw ne sw se; }
 _has_grub() { command -v "$GRUB_MKCONFIG" >/dev/null 2>&1; }
-_font_ok() { [ -f "$1" ] && grep -aqE "$2 $3([^0-9]|\$)" "$1"; }
 # ':rgba' recipe tag: bumping the generation recipe invalidates old-way slices.
 _bar_spec()   { printf '%s:%s:rgba' "$GRUB_SELECT_BG" "$GRUB_SELECT_PX"; }
 _frame_spec() { printf '%s:%s:rgba' "$GRUB_FRAME_BG" "$GRUB_FRAME_PX"; }
@@ -227,27 +198,15 @@ _place() {
   fi
 }
 
-gen_fonts() {
-  command -v "$GRUB_MKFONT" >/dev/null 2>&1 \
-    || { echo "$PKG: grub-mkfont absent; skipping fonts"; return 0; }
-  while read -r _base _ttf _wt _sz; do
-    [ -n "$_base" ] || continue
-    _dst="$GRUB_ASSETDIR/$_base"
-    if _font_ok "$_dst" "$_wt" "$_sz"; then
-      echo "$PKG: font $_base current (DejaVu Sans Mono $_wt $_sz)"; continue
-    fi
-    [ -f "$_ttf" ] \
-      || { echo "$PKG: TTF absent ($_ttf); skipping $_base"; continue; }
-    _tmp=$(mktemp)
-    "$GRUB_MKFONT" -s "$_sz" -o "$_tmp" "$_ttf" \
-      || { rm -f "$_tmp"; echo "$PKG: grub-mkfont failed ($_base)" >&2; \
-           return 1; }
-    sudo install -D -m 0644 -o root -g root "$_tmp" "$_dst"
-    rm -f "$_tmp"
-    echo "$PKG: generated font $_base (DejaVu Sans Mono $_wt $_sz)"; NEED_GRUB=1
-  done <<EOF
-$(_fonts)
-EOF
+# The fonts an older bootique generated, by name: never a glob, so nothing
+# else in the theme dir can be taken with them.
+_legacy_fonts() { echo mono.pf2 mono-bold.pf2 mono-sm.pf2 mono-sm-bold.pf2; }
+prune_fonts() {
+  for _f in $(_legacy_fonts); do
+    [ -e "$GRUB_ASSETDIR/$_f" ] || continue
+    sudo rm -f "$GRUB_ASSETDIR/$_f"
+    echo "$PKG: removed $_f (Secure Boot refuses theme fonts)"; NEED_GRUB=1
+  done
 }
 
 # gen_bar: the selected-item bar, one flat GRUB_SELECT_BG tile copied to all 9
@@ -328,35 +287,12 @@ revert_quiet_boot() {
   fi
 }
 
-# _gen_theme <dst>: theme.txt with the sizes this box's fonts were made at.
-# THE THEME NAMES ITS FONTS BY SIZE, and it used to be copied verbatim naming
-# 24, so any other size (the integrator sizes the menu per panel) generated
-# .pf2 files nothing asked for: GRUB looks a font up by its full name and,
-# finding none, falls back to the first one loaded, while the fixed 30px rows
-# clipped the larger glyphs. Rows and padding scale from 30/8 at 24px.
-# Compared GENERATED, like _gen_script, so check judges the box against what
-# it should have.
-_gen_theme() {
-  _ih=$(( (GRUB_FONT_SIZE * 30 + 12) / 24 ))
-  _ip=$(( (GRUB_FONT_SIZE * 8 + 12) / 24 ))
-  sed -e "s/@FONT@/$GRUB_FONT_SIZE/g" -e "s/@LABEL@/$GRUB_LABEL_SIZE/g" \
-    -e "s/@ITEM_H@/$_ih/g" -e "s/@ITEM_PAD@/$_ip/g" "$_gtheme_src" > "$1"
-  # Fail loud: a placeholder left behind is a theme GRUB rejects outright.
-  if grep -q '@[A-Z_]*@' "$1"; then
-    echo "$PKG: grub theme has an unfilled placeholder" >&2
-    _reported=1; exit 1
-  fi
-}
-
 grub_install() {
   _place "$_bg_src" "$GRUB_BG_DST" 0644 "grub background"
-  gen_fonts
+  prune_fonts
   gen_bar
   gen_frame
-  _gt=$(mktemp) || { echo "$PKG: mktemp failed" >&2; exit 1; }
-  _gen_theme "$_gt"
-  _place "$_gt" "$GRUB_THEME_DST" 0644 "grub theme"
-  rm -f "$_gt"
+  _place "$_gtheme_src" "$GRUB_THEME_DST" 0644 "grub theme"
   _place "$_gdropin_src" "$GRUB_DROPIN_DST" 0644 "grub theme drop-in"
   manage_quiet_boot
 }
@@ -375,23 +311,20 @@ _same() {
 grub_check() {
   _same "$_bg_src" "$GRUB_BG_DST" "grub background installed" \
     "grub background missing or stale (install)"
-  while read -r _base _ttf _wt _sz; do
-    [ -n "$_base" ] || continue
-    if _font_ok "$GRUB_ASSETDIR/$_base" "$_wt" "$_sz"; then
-      ok "grub font $_base ($_wt $_sz)"
-    else bad "grub font $_base missing or wrong weight/size (install)"; fi
-  done <<EOF
-$(_fonts)
-EOF
+  _lf=
+  for _f in $(_legacy_fonts); do
+    [ -e "$GRUB_ASSETDIR/$_f" ] && _lf="$_lf $_f"
+  done
+  if [ -n "$_lf" ]; then
+    bad "theme fonts left from an older install:$_lf; Secure Boot refuses"\
+" them, and grub.cfg still loads them (install removes)"
+  else ok "no theme fonts (the menu uses GRUB's built-in Unifont)"; fi
   if _bar_ok; then ok "grub selection bar ($GRUB_SELECT_BG)"
   else bad "grub selection bar missing or wrong colour (install)"; fi
   if _frame_ok; then ok "grub menu frame ($GRUB_FRAME_BG/${GRUB_FRAME_PX}px)"
   else bad "grub menu frame missing or wrong spec (install)"; fi
-  _gt=$(mktemp) || { echo "$PKG: mktemp failed" >&2; exit 1; }
-  _gen_theme "$_gt"
-  _same "$_gt" "$GRUB_THEME_DST" "grub theme current" \
+  _same "$_gtheme_src" "$GRUB_THEME_DST" "grub theme current" \
     "grub theme missing or stale (install)"
-  rm -f "$_gt"
   _same "$_gdropin_src" "$GRUB_DROPIN_DST" \
     "grub theme drop-in current (GRUB_THEME set)" \
     "grub theme drop-in missing or stale (install)"
@@ -444,28 +377,9 @@ _pkroot="$_root/plymouth"
 _hook_src="$_pkroot/bootique-kms"
 _alt_target=$BS_THEMEDIR/bootique.plymouth
 
-# GRUB_GFXMODE for the plymouth drop-in: the native mode of the first connected
-# panel (resolves headless). Menu cosmetics; the real resize fix is early-KMS.
-# Overridable ONLY so the in-repo test can plant a DRM state; nothing sets it on
-# a real box. The file's own header promises every system path is overridable,
-# and this one was not, which is why the bug below went untested.
+# The DRM tree _gpu_driver reads. Overridable ONLY so the in-repo test can plant
+# a state; nothing sets it on a real box.
 BS_DRM_ROOT=${BS_DRM_ROOT:-/sys/class/drm}
-_native_mode() {
-  for _c in "$BS_DRM_ROOT"/*/status; do
-    [ "$(cat "$_c" 2>/dev/null)" = connected ] || continue
-    _md=${_c%/status}/modes
-    [ -s "$_md" ] && { head -n1 "$_md"; return 0; }
-  done
-  # NO PANEL ANSWERED, which is a legitimate outcome (headless, or pre-modeset)
-  # and the caller already treats an empty answer as "omit GRUB_GFXMODE". This
-  # `return 0` is load-bearing: without it the function falls off a FAILING
-  # `[ -s ]` test, the assignment below takes that status, and `set -e` kills
-  # the whole script THERE, before a single line of output. That is how `check`
-  # came to exit 1 in silence on a connected connector whose `modes` was still
-  # empty, which is every freshly provisioned box before its first reboot.
-  return 0
-}
-BS_GFXMODE=${BS_GFXMODE:-$(_native_mode)}
 
 # Theme files into BS_THEMEDIR: "<dst-name> <src-path>". background.png is
 # the shared photo (same source as the grub desktop-image). bootique.script is
@@ -590,12 +504,9 @@ place_dropin() {
   printf '%s\n' \
     '# Enable the bootique plymouth splash. Overrides the base' \
     '# GRUB_CMDLINE_LINUX_DEFAULT; remove + update-grub to revert to a text' \
-    '# boot. GFXMODE + GFXPAYLOAD=keep make plymouth render at native res, so' \
-    '# no low->high switch strands the bg in a corner.' \
+    '# boot. No GRUB_GFXMODE here: the theme drop-in sets the menu mode.' \
     "GRUB_CMDLINE_LINUX_DEFAULT=\"$BS_CMDLINE\"" \
     'GRUB_GFXPAYLOAD_LINUX=keep' > "$_tmp"
-  [ -n "$BS_GFXMODE" ] \
-    && printf 'GRUB_GFXMODE=%s,auto\n' "$BS_GFXMODE" >> "$_tmp"
   if cmp -s "$_tmp" "$BS_DROPIN" 2>/dev/null; then
     echo "$PKG: splash cmdline drop-in current"
   else
@@ -695,8 +606,9 @@ _gpu_driver() {
   done
   # PROPHYLACTIC, not a fix for a live bug: every call site today reads this
   # through `[ "$(_gpu_driver)" = xe ]`, where the status is discarded, so
-  # falling off cannot bite. It is one bare call away from the failure
-  # `_native_mode` actually had, and it has no test for that reason.
+  # falling off cannot bite. It is one bare call away from the failure the
+  # since-removed `_native_mode` actually had, and it has no test for that
+  # reason.
   return 0
 }
 _uses_dracut() {
