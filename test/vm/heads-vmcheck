@@ -1,0 +1,170 @@
+#!/bin/sh
+# test/vm/heads-vmcheck - the unlock screen's monitors (plymouth/heads),
+# proven in a real plymouth: boot a LUKS guest to the passphrase prompt with
+# TWO displays and screendump both. A VM has no lid, so the lid comes from the
+# module's own command-line knob, set at prep:
+#
+#   heads-vmcheck <base-luks.qcow2> <luks-passphrase> open|closed [outdir]
+#
+#   open    the module keeps the laptop panel (bootique.panel=Virtual-1, the
+#           FIRST display): it shows the photo and the prompt pill, laid out
+#           for ITS OWN size, and the other display shows nothing
+#   closed  every display mirrored, as before: the photo on both
+#
+# The laptop is deliberately the SMALLER display (1024x768 beside 1440x900),
+# so a kept head laid out for the whole scene instead of itself shows a crop
+# of it: heads-verify measures the pill's WIDTH against the display (0.36 laid
+# out for itself, 0.51 as a crop), which the pill's position alone cannot
+# tell apart. Which display was kept is read from the module's own log line
+# on the serial console, never assumed from device order.
+#
+# Needs what plymouth-vmcheck needs (kvm, qemu, OVMF, python3, imagemagick).
+# Host-side, no sudo. Scratch defaults to /var/tmp/plyvm-heads.
+set -eu
+HERE=$(cd "$(dirname "$0")" && pwd)
+REPO=$(cd "$HERE/../.." && pwd)
+BASE=${1:?usage: heads-vmcheck <base.qcow2> <passphrase> open|closed [out]}
+PASS=${2:?usage: heads-vmcheck <base.qcow2> <passphrase> open|closed [out]}
+LID=${3:?usage: heads-vmcheck <base.qcow2> <passphrase> open|closed [out]}
+case $LID in open|closed) ;; *) echo "heads-vmcheck: open or closed" >&2
+                                exit 2 ;; esac
+SCRATCH=${PLYVM_SCRATCH:-/var/tmp/plyvm-heads}
+OUT=${4:-$SCRATCH/shots-$LID}
+GUEST_USER=${PLYVM_USER:-tester}
+GUEST_PASS=${PLYVM_UPASS:-testerpass}
+OVMF_CODE=${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE_4M.fd}
+OVMF_VARS=${OVMF_VARS:-/usr/share/OVMF/OVMF_VARS_4M.fd}
+[ -r "$BASE" ] || { echo "heads-vmcheck: no base image $BASE" >&2; exit 2; }
+mkdir -p "$SCRATCH/share/theme" "$SCRATCH/share/heads" "$OUT"
+rm -f "$OUT"/*.ppm "$OUT"/*.png
+cp "$HERE/plymouth-prep" "$HERE/heads-prep" "$SCRATCH/share/"
+for f in bootique.plymouth bootique.script pill.png dot.png \
+    shutdown-bg.png scrim.png; do
+  cp "$REPO/plymouth/$f" "$SCRATCH/share/theme/$f"
+done
+cp "$REPO/background.png" "$SCRATCH/share/theme/background.png"
+for f in module-setup.sh bootique-heads bootique-heads.service; do
+  cp "$REPO/plymouth/heads/$f" "$SCRATCH/share/heads/$f"
+done
+echo dracut > "$SCRATCH/share/initrd-mode"
+echo "$LID" > "$SCRATCH/share/heads-lid"
+
+# --- prep: the module, then plymouth + the theme + a dracut initramfs ---------
+# PLYVM_REUSE_PREP=1 keeps an earlier prep (same lid, same module) and only
+# captures again: for iterating on the capture or the verify, never for a
+# verdict on a changed module.
+PREP=$SCRATCH/prep.qcow2
+if [ "${PLYVM_REUSE_PREP:-0}" = 1 ] && [ -f "$PREP" ] \
+    && grep -q "HEADSPREP_DONE lid=$LID" "$SCRATCH/prep-serial.log" 2>/dev/null
+then
+  echo "heads-vmcheck: REUSING the prep in $PREP (lid $LID)"
+else
+rm -f "$PREP"; qemu-img create -f qcow2 -b "$BASE" -F qcow2 "$PREP" >/dev/null
+cp "$OVMF_VARS" "$SCRATCH/prep-vars.fd"
+SOCK=$SCRATCH/prep.sock; rm -f "$SOCK"
+_mnt='mount -t 9p -o trans=virtio,version=9p2000.L hostshare /mnt/h'
+_run="mkdir -p /mnt/h && $_mnt && sh /mnt/h/heads-prep"
+_run="$_run && sh /mnt/h/plymouth-prep"
+cat > "$SCRATCH/prep.expect" <<EOF
+timeout 220
+expect (?i)(please unlock|passphrase|unlock disk)
+send $PASS
+timeout 280
+expect login:
+send $GUEST_USER
+timeout 40
+expect (?i)password:
+send $GUEST_PASS
+timeout 40
+expect $GUEST_USER@
+send echo $GUEST_PASS | sudo -S sh -c '$_run'
+timeout 900
+expect PLYPREP_DONE
+timeout 90
+expect (?i)(reboot: Power down|Powering off)
+EOF
+echo "heads-vmcheck: prep boot (lid $LID) ..."
+qemu-system-x86_64 -enable-kvm -m 2048 -smp 2 \
+  -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
+  -drive if=pflash,format=raw,file="$SCRATCH/prep-vars.fd" \
+  -drive file="$PREP",if=virtio,format=qcow2 \
+  -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
+  -fsdev local,id=fs0,path="$SCRATCH/share",security_model=none \
+  -device virtio-9p-pci,fsdev=fs0,mount_tag=hostshare \
+  -display none \
+  -chardev socket,id=s0,path="$SOCK",server=on,wait=off -serial chardev:s0 \
+  >"$SCRATCH/prep-qemu.log" 2>&1 &
+QP=$!
+python3 "$HERE/vmexpect" --socket "$SOCK" --script "$SCRATCH/prep.expect" \
+  --log "$SCRATCH/prep-serial.log" --timeout 900 \
+  || { kill "$QP" 2>/dev/null || true; echo "heads-vmcheck: prep FAILED" >&2
+       exit 1; }
+kill "$QP" 2>/dev/null || true; wait "$QP" 2>/dev/null || true
+grep -q "HEADSPREP_DONE lid=$LID" "$SCRATCH/prep-serial.log" \
+  || { echo "heads-vmcheck: heads-prep did not run" >&2; exit 1; }
+fi
+
+# --- capture: two displays, to the passphrase prompt, both dumped -------------
+CAP=$SCRATCH/cap.qcow2
+rm -f "$CAP"; qemu-img create -f qcow2 -b "$PREP" -F qcow2 "$CAP" >/dev/null
+cp "$OVMF_VARS" "$SCRATCH/cap-vars.fd"
+CSOCK=$SCRATCH/cap.sock; CMON=$SCRATCH/cap-mon.sock
+rm -f "$CSOCK" "$CMON"
+# Only the module's line comes over serial: once the splash is up the prompt
+# is drawn on SCREEN and not on the console, so it is found the way the main
+# harness finds it, by the pill in a screendump (below).
+# Through the sentence's LAST word: vmexpect stops reading the moment its
+# last pattern matches, so matching only the prefix logged half a sentence.
+cat > "$SCRATCH/cap.expect" <<'EOF'
+timeout 240
+expect bootique-heads: .*(only|mirrored)
+EOF
+echo "heads-vmcheck: capture boot (two displays) ..."
+qemu-system-x86_64 -enable-kvm -m 2048 -smp 2 \
+  -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
+  -drive if=pflash,format=raw,file="$SCRATCH/cap-vars.fd" \
+  -drive file="$CAP",if=virtio,format=qcow2 \
+  -vga none \
+  -device virtio-gpu-pci,id=gpu0,edid=on,xres=1024,yres=768 \
+  -device virtio-gpu-pci,id=gpu1,edid=on,xres=1440,yres=900 \
+  -display none \
+  -chardev socket,id=s0,path="$CSOCK",server=on,wait=off -serial chardev:s0 \
+  -monitor unix:"$CMON",server,nowait \
+  >"$SCRATCH/cap-qemu.log" 2>&1 &
+QC=$!
+_rc=0
+python3 "$HERE/vmexpect" --socket "$CSOCK" --script "$SCRATCH/cap.expect" \
+  --log "$SCRATCH/cap-serial.log" --timeout 480 || _rc=$?
+dump() {   # both displays, to $OUT/gpu0.png and gpu1.png
+  for _d in gpu0 gpu1; do
+    printf 'screendump %s/%s.ppm %s 0\n' "$OUT" "$_d" "$_d" \
+      | socat - UNIX-CONNECT:"$CMON" >/dev/null 2>&1
+  done
+  sleep 1
+  for _d in gpu0 gpu1; do
+    [ -f "$OUT/$_d.ppm" ] && convert "$OUT/$_d.ppm" "$OUT/$_d.png"
+  done
+  return 0
+}
+if [ "$_rc" = 0 ]; then
+  _rc=1; _i=0
+  while [ "$_i" -lt 40 ]; do                  # about two minutes
+    dump
+    for _d in gpu0 gpu1; do
+      [ -f "$OUT/$_d.png" ] && python3 "$HERE/heads-verify" --pill \
+        "$OUT/$_d.png" && _rc=0
+    done
+    [ "$_rc" = 0 ] && break
+    _i=$((_i + 1)); sleep 2
+  done
+  [ "$_rc" = 0 ] && { sleep 3; dump; }        # settled, then the frames judged
+fi
+kill "$QC" 2>/dev/null || true; wait "$QC" 2>/dev/null || true
+[ "$_rc" = 0 ] || { echo "heads-vmcheck: FAIL: no prompt reached (see" \
+  "$SCRATCH/cap-serial.log)" >&2; exit 1; }
+
+# --- verify ------------------------------------------------------------------
+_said=$(tr -d '\r' < "$SCRATCH/cap-serial.log" \
+  | grep -a -m1 -o 'bootique-heads: .*\(only\|mirrored\)')
+echo "heads-vmcheck: module said: $_said"
+PLYVM_LID=$LID PLYVM_SAID=$_said python3 "$HERE/heads-verify" "$OUT"

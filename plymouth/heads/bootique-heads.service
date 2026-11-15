@@ -1,0 +1,18 @@
+# bootique-heads: which monitors the unlock screen is drawn on, decided in
+# the initramfs from the lid, written into the theme before plymouthd reads
+# it. See /usr/libexec/bootique-heads. Pulled in by plymouth-start, ordered
+# before it; after udev has triggered, so the GPU's connectors exist.
+[Unit]
+Description=bootique: choose the unlock screen's monitors (lid)
+DefaultDependencies=no
+ConditionPathExists=/etc/initrd-release
+After=systemd-udev-trigger.service systemd-udevd.service
+Before=plymouth-start.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/bootique-heads
+StandardOutput=journal+console
+
+[Install]
+WantedBy=plymouth-start.service

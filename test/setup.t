@@ -25,6 +25,7 @@ BTD=$T/plymouth-themes/bootique          # plymouth theme dir (parent exists)
 GDROP=$T/etc/default/grub.d/bootique.cfg
 BDROP=$T/etc/default/grub.d/splash.cfg
 DCONF=$T/etc/dracut.conf.d/90-bootique-kms.conf
+HCONF=$T/etc/dracut.conf.d/91-bootique-heads.conf
 HOOK=$T/etc/initramfs-tools/hooks/bootique-kms
 L10=$T/etc/grub.d/10_linux
 printf 'quiet_boot="1"\n' > "$L10"       # Ubuntu default, to be flipped to 0
@@ -154,6 +155,7 @@ run() {
     BS_OWNER="${OWNER:-$(id -un)}" \
     BS_USES_DRACUT="$USES_DRACUT" BS_GPU_DRIVER="$GPU" \
     BS_DRACUT_CONF="$DCONF" BS_FW_ROOT="$FWROOT" BS_HOOK_DST="$HOOK" \
+    BS_HEADS_CONF="$HCONF" \
     sh "${SCRIPT:-$HERE/setup.sh}" "$@"
 }
 
@@ -195,6 +197,18 @@ grep -qE 'GRUB_CMDLINE_LINUX_DEFAULT=.*splash' "$BDROP" \
 grep -qE 'force_drivers.*\bxe\b' "$DCONF" || fail "dracut KMS conf not written"
 grep -q 'install_items' "$DCONF" || fail "dracut KMS conf missing firmware"
 [ -e "$HOOK" ] && fail "initramfs-tools hook must be absent on a dracut box"
+# The unlock screen's monitors: the dracut module, executable where it runs,
+# and the conf that asks for it.
+HMOD=$DMODS/90bootique-heads
+for _f in module-setup.sh bootique-heads bootique-heads.service; do
+  cmp -s "$HERE/plymouth/heads/$_f" "$HMOD/$_f" \
+    || fail "unlock-screen module $_f not placed"
+done
+[ -x "$HMOD/bootique-heads" ] && [ -x "$HMOD/module-setup.sh" ] \
+  || fail "the module's scripts must be executable"
+[ -x "$HMOD/bootique-heads.service" ] && fail "a unit is not executable"
+grep -qx 'add_dracutmodules+=" bootique-heads "' "$HCONF" \
+  || fail "the dracut conf must ask for the module: $(cat "$HCONF")"
 [ -f "$IMARK" ] || fail "initramfs not rebuilt on first install"
 [ -f "$GMARK" ] || fail "grub.cfg not regenerated on first install"
 
@@ -206,6 +220,14 @@ run install >/dev/null 2>&1 || fail "second install exited non-zero"
 
 # --- check: clean, then drift on each managed piece --------------------------
 run check >/dev/null 2>&1 || fail "check reported drift on a settled box"
+mv "$HMOD/bootique-heads" "$T/heads.aside"
+run check >/dev/null 2>&1 && fail "check passed with the module's script gone"
+mv "$T/heads.aside" "$HMOD/bootique-heads"
+printf '# hand edit\n' >> "$HCONF"
+run check >/dev/null 2>&1 && fail "check passed with a stale module conf"
+rm -f "$IMARK"; run install >/dev/null 2>&1
+[ -f "$IMARK" ] || fail "a module conf repair must rebuild the initramfs"
+run check >/dev/null 2>&1 || fail "check dirty after the module was repaired"
 printf 'stale\n' >> "$GAD/theme.txt"
 run check >/dev/null 2>&1 && fail "check passed with a stale grub theme"
 run install >/dev/null 2>&1
@@ -343,6 +365,8 @@ run install >/dev/null 2>&1 || fail "install (initramfs-tools mode) non-zero"
 cmp -s "$HERE/plymouth/bootique-kms" "$HOOK" || fail "early-KMS hook not placed"
 [ -x "$HOOK" ] || fail "early-KMS hook not executable"
 [ -e "$DCONF" ] && fail "dracut conf must be removed in initramfs-tools mode"
+[ -e "$HCONF" ] || [ -d "$HMOD" ] \
+  && fail "the unlock-screen module must go on a non-dracut box"
 run check >/dev/null 2>&1 || fail "check drifted in initramfs-tools mode"
 USES_DRACUT=1; GPU=
 run install >/dev/null 2>&1 || fail "install (non-xe GPU) non-zero"
@@ -393,6 +417,8 @@ run uninstall >/dev/null 2>&1 || fail "uninstall exited non-zero"
 [ -e "$BDROP" ] && fail "splash drop-in not removed on uninstall"
 [ -d "$GAD" ] && fail "grub theme dir not removed on uninstall"
 [ -d "$BTD" ] && fail "plymouth theme dir not removed on uninstall"
+[ -e "$HCONF" ] || [ -d "$HMOD" ] \
+  && fail "uninstall must remove the unlock-screen module and its conf"
 # install EDITS a file it does not own (/etc/grub.d/10_linux, quiet_boot
 # 1 -> 0). It is the only change bootique makes outside its own paths, so
 # it is the one uninstall must put back, because otherwise "uninstalled" leaves
@@ -434,7 +460,7 @@ grep -q ':rgba$' "$GAD/.frame.spec" || fail "install did not re-stamp the frame"
 # silently, which is the whole reason that guard exists.
 mkdir -p "$T/repo/plymouth" "$T/repo/grub"
 cp "$HERE/setup.sh" "$T/repo/"; cp "$HERE/background.png" "$T/repo/"
-cp "$HERE"/plymouth/* "$T/repo/plymouth/"; cp "$HERE"/grub/* "$T/repo/grub/"
+cp -R "$HERE"/plymouth/* "$T/repo/plymouth/"; cp "$HERE"/grub/* "$T/repo/grub/"
 sed -i 's/^unlock_mode = "remote";/unlock_mode =\n  "remote";/' \
   "$T/repo/plymouth/bootique.script"
 SCRIPT="$T/repo/setup.sh"
@@ -512,7 +538,7 @@ run install >/dev/null 2>&1 || fail "install broken after the double uninstall"
 # script is never edited to test it.
 mkdir -p "$T/leakrepo/plymouth" "$T/leakrepo/grub"
 cp "$HERE/background.png" "$T/leakrepo/"
-cp "$HERE"/plymouth/* "$T/leakrepo/plymouth/"
+cp -R "$HERE"/plymouth/* "$T/leakrepo/plymouth/"
 cp "$HERE"/grub/* "$T/leakrepo/grub/"
 # Planted AFTER the trap is armed, since the point is to prove the trap
 # speaks; a leak before it would be the silent exit the trap exists to end.

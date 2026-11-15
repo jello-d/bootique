@@ -116,6 +116,27 @@ mode, the `script` plugin never loads, and no theme state can be observed at
 all. resolute ships dracut 110, which checks for `plymouth-populate-initrd`
 instead and works.
 
+## The unlock screen's monitors: `heads-vmcheck`
+
+A separate, lighter driver for `plymouth/heads` (the dracut module that keeps
+the unlock screen on the laptop panel while its lid is open). It boots to the
+passphrase prompt with TWO virtio-gpu displays and screendumps both, without
+unlocking:
+
+    heads-vmcheck <base.qcow2> <passphrase> open|closed [outdir]
+
+A VM has no lid and its panels are `Virtual-N`, so `heads-prep` puts the
+module's own knobs on the kernel command line (`bootique.lid=`,
+`bootique.panel=Virtual-1`). `open` must keep the first display (the photo and
+the pill on it, nothing on the other); `closed` must mirror (the photo on
+both). The kept display is the SMALLER one on purpose, so a kept head laid
+out for the whole scene instead of itself shows a crop of it; `heads-verify`
+catches that by the pill's WIDTH against the display (0.36 laid out for
+itself, 0.51 as a crop, measured), since the pill's position alone could not:
+the first version of this check passed a mirrored crop. Which display was
+kept is read from the module's own log line on the serial console, not assumed
+from device order. `heads-verify` judges the two frames.
+
 ## Run
 
     # once per suite: drop its cloud image in the scratch dir, from

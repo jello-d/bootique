@@ -1,0 +1,123 @@
+#!/bin/sh
+# bootique-heads: in the initramfs, BEFORE plymouthd starts, decide which
+# monitors the unlock screen is drawn on, and write it into the theme.
+#
+#   lid OPEN, a laptop panel connected   that panel only: keep_w/keep_h in
+#                                        bootique.script become its size
+#   lid CLOSED, no lid, anything unknown  every monitor, mirrored (the theme
+#                                        as installed: keep_w = 0)
+#
+# WHY HERE: the plymouth script language can read no file and no kernel
+# command line, so a fact only known at boot (is the lid open?) has to be
+# written into the theme before plymouthd loads it.
+#
+# HOW: a COPY in /run, edited, bind-mounted over the theme script. The
+# initramfs root is READ-ONLY (measured in a dracut VM: `sed -i` there fails
+# "Read-only file system"), while /run is a writable tmpfs. Nothing on disk
+# changes, and the mount goes with the initramfs at switch-root, by when
+# plymouthd has long since loaded the theme.
+#
+# WHY THE SIZE, not the connector: the script knows a monitor only by its
+# index and size. The laptop panel's PREFERRED mode (the kernel lists it
+# first) is what plymouth lights it at once the GPU driver is up, which
+# bootique's early KMS makes happen before the first frame.
+#
+# FAIL-SAFE BY CONSTRUCTION: every path that is not sure leaves the theme
+# alone, which is mirrored, so a lid that reads wrongly can never put the
+# prompt only on a dark panel. It never fails the boot either: exit 0 always,
+# one line saying what it decided (the journal keeps it).
+#
+# Kernel command line, for diagnosis and the VM test:
+#   bootique.lid=open|closed   take this instead of reading the lid
+#   bootique.panel=<conn>      this connector is the laptop's (e.g. Virtual-1)
+#
+# Paths are overridable for test/heads.t: BOOTIQUE_LID, BOOTIQUE_DRM,
+# BOOTIQUE_THEME, BOOTIQUE_CMDLINE, BOOTIQUE_RUN (where the copy goes);
+# BOOTIQUE_WAIT is how many seconds to wait for the laptop panel to appear
+# (the GPU driver may still be binding).
+#
+# NO `set -e`, on purpose: a probe that fails must fall through to mirrored.
+LID=${BOOTIQUE_LID:-/proc/acpi/button/lid}
+DRM=${BOOTIQUE_DRM:-/sys/class/drm}
+THEME=${BOOTIQUE_THEME:-/usr/share/plymouth/themes/bootique/bootique.script}
+CMDLINE=${BOOTIQUE_CMDLINE:-/proc/cmdline}
+WAIT=${BOOTIQUE_WAIT:-3}
+RUN=${BOOTIQUE_RUN:-/run/bootique-heads}
+
+say() { echo "bootique-heads: $*"; }
+
+# arg <name>: the value of `name=` on the kernel command line, or nothing.
+arg() {
+  # shellcheck disable=SC2013  # the command line IS words
+  for _w in $(cat "$CMDLINE" 2>/dev/null); do
+    case $_w in "$1"=*) printf '%s\n' "${_w#*=}"; return 0 ;; esac
+  done
+  return 0
+}
+
+lid=$(arg bootique.lid)
+if [ -z "$lid" ]; then
+  _st=$(cat "$LID"/*/state 2>/dev/null)
+  case $_st in
+    *closed*) lid=closed ;;       # any lid closed: mirrored
+    *open*)   lid=open ;;
+  esac
+fi
+case $lid in
+  open) ;;
+  closed) say "lid closed: every monitor, mirrored"; exit 0 ;;
+  *) say "no lid to read: every monitor, mirrored"; exit 0 ;;
+esac
+
+# panel: the laptop's connector, `<name> <W> <H>` of its preferred mode, or
+# nothing: connected, with a mode, named eDP/LVDS/DSI (or bootique.panel=).
+want=$(arg bootique.panel)
+panel() {
+  for _c in "$DRM"/card*-*; do
+    _n=${_c##*/}; _n=${_n#card*-}
+    if [ -n "$want" ]; then
+      [ "$_n" = "$want" ] || continue
+    else
+      case $_n in eDP-*|LVDS-*|DSI-*) ;; *) continue ;; esac
+    fi
+    [ "$(cat "$_c/status" 2>/dev/null)" = connected ] || continue
+    _m=$(head -n 1 "$_c/modes" 2>/dev/null)
+    case $_m in
+      [1-9]*x[1-9]*) printf '%s %s %s\n' "$_n" "${_m%%x*}" "${_m#*x}"
+                     return 0 ;;
+    esac
+  done
+  return 0
+}
+p=$(panel)
+_i=0
+while [ -z "$p" ] && [ "$_i" -lt "$WAIT" ]; do
+  sleep 1; _i=$((_i + 1)); p=$(panel)
+done
+if [ -z "$p" ]; then
+  say "lid open, but no laptop panel connected: every monitor, mirrored"
+  exit 0
+fi
+# shellcheck disable=SC2086  # `<name> <W> <H>`: splitting it is the point
+set -- $p
+case $2$3 in *[!0-9]*) say "odd mode '$2x$3': mirrored"; exit 0 ;; esac
+
+if ! grep -q '^keep_w = ' "$THEME" 2>/dev/null \
+    || ! grep -q '^keep_h = ' "$THEME" 2>/dev/null; then
+  say "the theme has no keep_w/keep_h lines: mirrored"
+  exit 0
+fi
+# Each step in its own words on failure, so the journal says WHY.
+_copy=$RUN/${THEME##*/}
+if ! _e=$(mkdir -p "$RUN" 2>&1 && cp "$THEME" "$_copy" 2>&1 \
+    && sed -i "s/^keep_w = .*/keep_w = $2;/; s/^keep_h = .*/keep_h = $3;/" \
+      "$_copy" 2>&1); then
+  say "could not make the copy ($_e): mirrored"
+  exit 0
+fi
+if ! _e=$(mount --bind "$_copy" "$THEME" 2>&1); then
+  say "could not put the copy in place ($_e): mirrored"
+  exit 0
+fi
+say "lid open: the unlock screen on $1 ($2x$3) only"
+exit 0

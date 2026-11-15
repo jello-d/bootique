@@ -1,0 +1,29 @@
+#!/bin/sh
+# test/vm/heads-prep - runs as root IN the guest (via the 9p share), BEFORE
+# plymouth-prep, for heads-vmcheck. Puts the unlock-screen module where
+# setup.sh puts it on a dracut box, the conf that asks for it, and the lid
+# and the laptop panel on the kernel command line: a VM has no lid, and its
+# panels are Virtual-N, so both come from bootique-heads' own command-line
+# knobs (bootique.lid=, bootique.panel=). plymouth-prep then builds the dracut
+# initramfs and runs update-grub, which picks this up.
+#
+# /mnt/h/heads-lid holds `open` or `closed`. The conf line is setup.sh's
+# _heads_conf; keep the two the same.
+set -eux
+M=/usr/lib/dracut/modules.d/90bootique-heads
+install -d "$M"
+install -m0755 /mnt/h/heads/module-setup.sh "$M/module-setup.sh"
+install -m0755 /mnt/h/heads/bootique-heads "$M/bootique-heads"
+install -m0644 /mnt/h/heads/bootique-heads.service \
+  "$M/bootique-heads.service"
+mkdir -p /etc/dracut.conf.d
+printf 'add_dracutmodules+=" bootique-heads "\n' \
+  > /etc/dracut.conf.d/91-bootique-heads.conf
+LID=$(cat /mnt/h/heads-lid)
+# Sourced AFTER plymouth-prep's zz-splash.cfg (it sets the variable outright),
+# so this appends to that.
+# shellcheck disable=SC2016  # $GRUB_CMDLINE_LINUX_DEFAULT is for grub to expand
+printf 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT %s"\n' \
+  "bootique.lid=$LID bootique.panel=Virtual-1" \
+  > /etc/default/grub.d/zzz-heads.cfg
+echo "HEADSPREP_DONE lid=$LID"

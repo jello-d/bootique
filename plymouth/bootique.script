@@ -81,6 +81,14 @@ prompt_shown = 0; cur_bullets = 0;
 # GENERATED: setup.sh rewrites the assignment below at install time, so keep it
 # on ONE line in exactly this shape.
 unlock_mode = "remote";
+# THE HEAD TO KEEP, the laptop's own panel when its lid is OPEN: its size,
+# written at BOOT (never at install) by the initramfs step bootique-heads,
+# which reads the lid and the panel before plymouthd starts. 0 leaves every
+# head mirrored, which is the old look and what any box without that step
+# keeps: a lid that is closed, unknown or absent must never put the prompt
+# on a panel nobody can see. ONE line each, in exactly this shape.
+keep_w = 0;
+keep_h = 0;
 # The racing window, as ONE fact in seconds plus the tick rate it is counted
 # in. on_refresh is driven at about 50/s by the script plugin (calibrated
 # against a real boot journal, not read from source). race_ticks is DERIVED so
@@ -104,6 +112,9 @@ next_sec = 0;        # tick the next second boundary lands on
 next_blink = 0;      # tick the next pulse flip lands on
 if (unlock_mode != "remote") { race_over = 1; }   # nothing to race for here
 W = 0; H = 0;
+solo = -1;           # the head shown alone (the kept one), or -1: mirrored
+was_solo = 0;        # 1 once a head was shown alone (offsets were moved)
+VW = 0; VH = 0;      # the size the layout is for: the solo head, or all
 sz_title = 0; sz_status = 0; dot_sz = 0; dot_pitch = 0; sz_hint = 0;
 sz_tail = 0; sz_esc = 0; pill_w = 0; pill_h = 0; pill_y = 0; edge_x = 0;
 tail_gap = 0; tail_bottom = 0; tail_x = 0; dot_img = NULL;
@@ -150,6 +161,62 @@ esc = Sprite(); esc.SetZ(5);
 scrim = Sprite(); scrim.SetZ(3);
 offlabel = Sprite();
 
+# The most heads asked about. A bounded `for`, not `while`: this theme has
+# only ever exercised `for` loops, and an index past the last head answers
+# NULL, which each loop skips.
+max_heads = 8;
+
+# pick_solo: the index of the head that is keep_w x keep_h, or -1.
+fun pick_solo() {
+  _s = -1;
+  if (keep_w > 0) {
+    for (_i = 0; _i < max_heads; _i++) {
+      if (_s < 0) {
+        if (Window.GetWidth(_i) == keep_w) {
+          if (Window.GetHeight(_i) == keep_h) { _s = _i; }
+        }
+      }
+    }
+  }
+  return _s;
+}
+
+# heads: which head shows the splash, and the size the layout is for (VW VH).
+# Shown alone, the kept head's view sits at the origin of the scene and every
+# other head looks far away from it, at nothing but the background. Run on
+# EVERY tick (on_refresh): plymouth re-centres every head when one is added,
+# and a dock's heads arrive late. Mirrored, the offsets are left exactly as
+# plymouth set them, unless a solo head was shown before, when they go back
+# to plymouth's own centring.
+fun heads() {
+  solo = pick_solo();
+  if (solo >= 0) {
+    VW = Window.GetWidth(solo); VH = Window.GetHeight(solo);
+  } else {
+    VW = Window.GetWidth(); VH = Window.GetHeight();
+  }
+  # A flag, not `||`: like `--` (see on_refresh), an operator this theme
+  # has never exercised is not worth the risk in a file only a boot checks.
+  _touch = was_solo;
+  if (solo >= 0) { _touch = 1; }
+  if (_touch == 1) {
+    for (_i = 0; _i < max_heads; _i++) {
+      if (Window.GetWidth(_i)) {
+        if (solo < 0) {
+          Window.SetX(_i, (VW - Window.GetWidth(_i)) / 2);
+          Window.SetY(_i, (VH - Window.GetHeight(_i)) / 2);
+        } else {
+          if (_i == solo) { Window.SetX(_i, 0); Window.SetY(_i, 0); }
+          if (_i != solo) {
+            Window.SetX(_i, -100000); Window.SetY(_i, -100000);
+          }
+        }
+      }
+    }
+  }
+  if (solo >= 0) { was_solo = 1; }
+}
+
 # centre SPRITE's IMG horizontally at Y. The explicit opacity is what makes a
 # sprite re-showable: see hide_prompt for why hiding one has to use opacity.
 fun centre(sprite, img, y) {
@@ -163,8 +230,9 @@ fun centre(sprite, img, y) {
 # are FRACTIONS of the panel, never absolute pixels, so the layout is
 # resolution-independent and the half-res VM preview is faithful.
 fun compute_geometry() {
-  W = Window.GetWidth();
-  H = Window.GetHeight();
+  heads();
+  W = VW;
+  H = VH;
   sz_title  = H * 0.020;   # "Unlock" title / shutdown mode label (bold)
   sz_status = H * 0.012;   # top phase line (boot only, small)
   dot_sz    = H * 0.011;   # passphrase dot diameter (dot.png)
@@ -479,9 +547,13 @@ Plymouth.SetMessageFunction(on_message);
 # exact integer without depending on a Math builtin.
 fun on_refresh() {
   tick++;
+  # heads() also re-places the kept head after a hotplug re-centred it.
+  _ow = W; _oh = H; _os = solo;
+  heads();
   _changed = 0;
-  if (Window.GetWidth() != W) { _changed = 1; }
-  if (Window.GetHeight() != H) { _changed = 1; }
+  if (VW != _ow) { _changed = 1; }
+  if (VH != _oh) { _changed = 1; }
+  if (solo != _os) { _changed = 1; }
   if (_changed == 1) { relayout(); }
   if (race_over == 0 && race_start > 0) {
     _redraw = 0;

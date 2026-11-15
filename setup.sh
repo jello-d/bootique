@@ -370,6 +370,13 @@ BS_MODE_FILE=${BS_MODE_FILE:-/etc/bootique/unlock-mode}
 BS_CLEVIS_BIN=${BS_CLEVIS_BIN:-clevis}
 BS_DRACUT_MODDIR=${BS_DRACUT_MODDIR:-/usr/lib/dracut/modules.d}
 BS_DRACUT_CONF=${BS_DRACUT_CONF:-/etc/dracut.conf.d/90-bootique-kms.conf}
+# THE UNLOCK SCREEN'S MONITORS (see plymouth/heads/bootique-heads): a dracut
+# module that reads the lid in the initramfs and keeps the splash on the
+# laptop panel when it is open. Dracut only finds modules in its own tree, so
+# that is where it goes, root-owned (root runs it at boot); the conf asks for
+# it. A box that is not on dracut gets neither, and stays mirrored.
+BS_HEADS_MODDIR=${BS_HEADS_MODDIR:-$BS_DRACUT_MODDIR/90bootique-heads}
+BS_HEADS_CONF=${BS_HEADS_CONF:-/etc/dracut.conf.d/91-bootique-heads.conf}
 BS_FW_ROOT=${BS_FW_ROOT:-/lib/firmware}
 UPDATE_INITRAMFS=${UPDATE_INITRAMFS:-update-initramfs}
 UPDATE_ALTERNATIVES=${UPDATE_ALTERNATIVES:-update-alternatives}
@@ -662,6 +669,76 @@ place_kms() {
   fi
 }
 
+# The module's files: "<name> <mode>". All three are root's at boot.
+_heads_files() {
+  printf '%s\n' "module-setup.sh 0755" "bootique-heads 0755" \
+    "bootique-heads.service 0644"
+}
+_heads_conf() {
+  printf '%s\n' \
+    '# bootique: the unlock screen on the laptop panel while its lid is open' \
+    '# (plymouth/heads/bootique-heads); mirrored on every monitor otherwise.' \
+    'add_dracutmodules+=" bootique-heads "'
+}
+# _rm_heads <why>: the module and its conf, file by file (no rm -r on a
+# variable), then the directory only if that left it empty.
+_rm_heads() {
+  _had=
+  while read -r _n _m; do
+    [ -e "$BS_HEADS_MODDIR/$_n" ] || continue
+    sudo rm -f "$BS_HEADS_MODDIR/$_n"; _had=1
+  done <<EOF
+$(_heads_files)
+EOF
+  # `|| :`: a directory something else put a file in stays, and under
+  # set -e a failed last command of an && list would end the script.
+  [ -d "$BS_HEADS_MODDIR" ] && sudo rmdir "$BS_HEADS_MODDIR" 2>/dev/null || :
+  [ -e "$BS_HEADS_CONF" ] && { sudo rm -f "$BS_HEADS_CONF"; _had=1; }
+  [ -n "$_had" ] && { echo "$PKG: removed the unlock-screen module ($1)"
+                      NEED_INITRAMFS=1; }
+  return 0
+}
+place_heads() {
+  _uses_dracut || { _rm_heads "non-dracut box"; return 0; }
+  while read -r _n _m; do
+    if cmp -s "$_pkroot/heads/$_n" "$BS_HEADS_MODDIR/$_n" 2>/dev/null; then
+      continue
+    fi
+    sudo install -D -m "$_m" -o root -g root "$_pkroot/heads/$_n" \
+      "$BS_HEADS_MODDIR/$_n"
+    echo "$PKG: wrote unlock-screen module $_n"; NEED_INITRAMFS=1
+  done <<EOF
+$(_heads_files)
+EOF
+  _tmp=$(mktemp); _heads_conf > "$_tmp"
+  if ! cmp -s "$_tmp" "$BS_HEADS_CONF" 2>/dev/null; then
+    sudo install -D -m 0644 -o root -g root "$_tmp" "$BS_HEADS_CONF"
+    echo "$PKG: wrote dracut conf for the unlock-screen module"
+    NEED_INITRAMFS=1
+  fi
+  rm -f "$_tmp"
+}
+heads_check() {
+  if ! _uses_dracut; then
+    ok "unlock-screen module not applicable (not a dracut box): mirrored"
+    return 0
+  fi
+  while read -r _n _m; do
+    _same "$_pkroot/heads/$_n" "$BS_HEADS_MODDIR/$_n" \
+      "unlock-screen module $_n current" \
+      "unlock-screen module $_n missing or stale (install)"
+    _own_ok "$BS_HEADS_MODDIR/$_n" "unlock-screen module $_n"
+  done <<EOF
+$(_heads_files)
+EOF
+  _hc=$(mktemp); _heads_conf > "$_hc"
+  _same "$_hc" "$BS_HEADS_CONF" \
+    "dracut conf asks for the unlock-screen module" \
+    "dracut conf for the unlock-screen module missing or stale (install)"
+  rm -f "$_hc"
+  _own_ok "$BS_HEADS_CONF" "unlock-screen dracut conf"
+}
+
 plymouth_install() {
   _load_mode
   echo "$PKG: unlock prompt mode: $_MODE ($_MODE_WHY)"
@@ -670,6 +747,7 @@ plymouth_install() {
   place_dropin
   place_quitwait
   place_kms
+  place_heads
 }
 
 plymouth_check() {
@@ -715,6 +793,7 @@ EOF
     "plymouth-quit-wait drop-in missing or stale (install)"
   rm -f "$_qw"
   _plymouth_root_check
+  heads_check
   return 0
 }
 
@@ -746,7 +825,8 @@ _plymouth_root_check() {
 _initrd_fresh() {
   _img=$(_initrd_img) || return 0
   _newest=$BS_THEMEDIR/bootique.script
-  for _f in "$BS_THEMEDIR"/* "$BS_DRACUT_CONF" "$BS_HOOK_DST"; do
+  for _f in "$BS_THEMEDIR"/* "$BS_DRACUT_CONF" "$BS_HOOK_DST" \
+      "$BS_HEADS_MODDIR"/* "$BS_HEADS_CONF"; do
     [ -e "$_f" ] || continue
     [ "$_f" -nt "$_newest" ] && _newest=$_f
   done
@@ -897,6 +977,7 @@ do_uninstall() {
   done
   # Leave no empty .d behind. rmdir only ever removes an EMPTY directory, so
   # it cannot take anything else's drop-in with it.
+  _rm_heads uninstall
   _qwdir=$(dirname "$BS_QUITWAIT_DROPIN")
   [ -d "$_qwdir" ] && sudo rmdir "$_qwdir" 2>/dev/null || :
   revert_quiet_boot

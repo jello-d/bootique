@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+# test/vm/heads-verify - judge heads-vmcheck's two screendumps, gpu0.png and
+# gpu1.png. Exits non-zero if any assertion fails. ImageMagick via
+# subprocess, the same probes plymouth-verify uses:
+#   PHOTO   the background fills the frame: both bottom corners non-black
+#   PILL    the prompt pill: a green-led band centred at 0.44 of the height
+#   BLANK   nothing drawn: the whole frame dark and flat
+#   OWN     laid out for THIS display: the pill is 0.36 of the width the
+#           theme lays out for (pill_w), so a row through it is ~0.36 green
+#           on a display laid out for itself, and ~0.51 on a 1024 crop of a
+#           1440 layout (measured: 0.359 kept, 0.506 mirrored crop). The
+#           pill band alone cannot tell them apart: the crop's pill still
+#           overlaps it.
+# PLYVM_LID (open|closed) is what the guest was told; PLYVM_SAID the module's
+# own log line, which names the size it kept (open) or says it mirrored.
+import os, re, subprocess, sys
+
+# `heads-verify --pill FILE`: exit 0 if FILE shows the pill. The capture
+# polls with it, since the prompt is drawn on screen and NOT on the serial
+# console once the splash is up.
+if len(sys.argv) == 3 and sys.argv[1] == "--pill":
+    OUT, ONE = os.path.dirname(sys.argv[2]), os.path.basename(sys.argv[2])
+else:
+    OUT, ONE = sys.argv[1], None
+LID = os.environ.get("PLYVM_LID", "")
+SAID = os.environ.get("PLYVM_SAID", "")
+fails = []
+
+
+def fx(png, expr, crop=None):
+    args = ["convert", os.path.join(OUT, png)]
+    if crop:
+        args += ["-crop", crop, "+repage"]
+    args += ["-format", "%[fx:" + expr + "]", "info:"]
+    r = subprocess.run(args, capture_output=True, text=True)
+    try:
+        return float(r.stdout.strip())
+    except ValueError:
+        return -1.0
+
+
+def dims(png):
+    r = subprocess.run(["identify", "-format", "%w %h",
+                        os.path.join(OUT, png)], capture_output=True,
+                       text=True)
+    w, h = r.stdout.split()
+    return int(w), int(h)
+
+
+def region(d, wf, hf, xf, yf):
+    w, h = d
+    return "%dx%d+%d+%d" % (int(wf * w), int(hf * h), int(xf * w),
+                            int(yf * h))
+
+
+def photo(png):
+    d = dims(png)
+    return (fx(png, "mean", region(d, 0.12, 0.12, 0.85, 0.85)) > 0.05 and
+            fx(png, "mean", region(d, 0.12, 0.12, 0.03, 0.85)) > 0.05)
+
+
+def pill(png):
+    band = region(dims(png), 0.4, 0.06, 0.3, 0.44)
+    g, r, b = (fx(png, "mean." + c, band) for c in "grb")
+    return g > r + 0.04 and g > b + 0.06
+
+
+def own_size(png):
+    w, h = dims(png)
+    row = "%dx1+0+%d" % (w, int(h * 0.465))       # pill_y + pill_h / 2
+    args = ["convert", os.path.join(OUT, png), "-crop", row, "+repage",
+            "-fx", "(g>r+0.04 && g>b+0.06) ? 1 : 0", "-format",
+            "%[fx:mean]", "info:"]
+    r = subprocess.run(args, capture_output=True, text=True)
+    try:
+        f = float(r.stdout.strip())
+    except ValueError:
+        return False, -1.0
+    return abs(f - 0.36) < 0.04, f
+
+
+def blank(png):
+    return fx(png, "mean") < 0.05 and fx(png, "standard_deviation") < 0.02
+
+
+def check(name, cond, detail=""):
+    print("  %s %s%s" % ("ok  " if cond else "FAIL", name,
+                         (": " + detail) if detail and not cond else ""))
+    if not cond:
+        fails.append(name)
+
+
+if ONE:
+    sys.exit(0 if pill(ONE) else 1)
+frames = {f: dims(f) for f in ("gpu0.png", "gpu1.png")}
+print("  frames: %s" % ", ".join("%s %dx%d" % (f, *d)
+                                 for f, d in frames.items()))
+if LID == "open":
+    m = re.search(r"on \S+ \((\d+)x(\d+)\) only", SAID)
+    check("the module kept a panel", m is not None, SAID)
+    if m:
+        kept = [f for f, d in frames.items()
+                if d == (int(m.group(1)), int(m.group(2)))]
+        check("exactly one display is the kept size", len(kept) == 1,
+              str(frames))
+        if len(kept) == 1:
+            k = kept[0]
+            o = [f for f in frames if f != k][0]
+            check("%s (kept): the photo fills it" % k, photo(k))
+            check("%s (kept): the pill" % k, pill(k))
+            ok, f = own_size(k)
+            check("%s (kept): laid out for ITS OWN size" % k, ok,
+                  "pill row %.3f, want ~0.36 (a crop of the whole scene"
+                  " reads wider)" % f)
+            check("%s (not kept): nothing drawn" % o, blank(o),
+                  "mean %.3f sd %.3f" % (fx(o, "mean"),
+                                         fx(o, "standard_deviation")))
+else:
+    check("the module mirrored for a closed lid", "lid closed" in SAID, SAID)
+    for f in frames:
+        check("%s: the photo (mirrored)" % f, photo(f))
+    big = max(frames, key=lambda f: frames[f][0])
+    check("%s: the pill" % big, pill(big))
+print("heads-verify: %s" % ("FAIL (%d)" % len(fails) if fails else "PASS"))
+sys.exit(1 if fails else 0)

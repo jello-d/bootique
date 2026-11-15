@@ -104,6 +104,19 @@ GPU, the initramfs-tools hook otherwise, nothing on a non-xe box. It composes
 with other initramfs drop-ins (e.g. an early-boot ssh server for remote unlock)
 via
 .BR update-initramfs .
+.SH THE UNLOCK SCREEN'S MONITORS
+On a dracut box, a small initramfs module reads the lid before Plymouth
+starts. With the lid OPEN and a laptop panel connected, the unlock screen is
+drawn on that panel alone and the other monitors stay dark; with the lid
+closed, no lid, or anything it cannot be sure of, every monitor shows it,
+mirrored, as before (so the prompt can never land only on a panel nobody can
+see). It writes the panel's size into the initramfs copy of the theme, never
+the installed one, and says what it chose in the boot journal. Two kernel
+command-line words override it, for diagnosis:
+.B bootique.lid=open|closed
+and
+.BR bootique.panel=<connector> .
+A box on initramfs-tools gets nothing and stays mirrored.
 .SH FILES
 .TP
 .I /boot/grub/themes/bootique/
@@ -121,6 +134,12 @@ drop-ins.
 .I /etc/dracut.conf.d/90-bootique-kms.conf
 The early-KMS drop-in on a dracut box (the driver and its firmware). Removed
 when the box uses initramfs-tools instead.
+.TP
+.I /usr/lib/dracut/modules.d/90bootique-heads/
+.TQ
+.I /etc/dracut.conf.d/91-bootique-heads.conf
+The unlock-screen module (root's, run in the initramfs) and the conf that asks
+for it, on a dracut box only.
 .TP
 .I /etc/initramfs-tools/hooks/bootique-kms
 The early-KMS hook on an initramfs-tools box. Removed when the box uses dracut
