@@ -11,6 +11,9 @@ Before=plymouth-start.service
 
 [Service]
 Type=oneshot
+# Stays ACTIVE after it ran, so a later start request is a no-op: without it
+# systemd started this again during the switch-root transaction (seen live).
+RemainAfterExit=yes
 ExecStart=/usr/libexec/bootique-heads
 StandardOutput=journal+console
 

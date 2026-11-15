@@ -109,6 +109,15 @@ if ! grep -q '^keep_w = ' "$THEME" 2>/dev/null \
 fi
 # Each step in its own words on failure, so the journal says WHY.
 _copy=$RUN/${THEME##*/}
+# ALREADY IN PLACE: the theme IS our copy (a second run, after the bind).
+# Seen live: systemd started this again during the switch-root transaction,
+# when cp then refused "the same file" and the line said "mirrored", which
+# was false. The unit now stays active (RemainAfterExit); this covers any
+# other way a second run happens.
+if [ -e "$_copy" ] && [ "$THEME" -ef "$_copy" ]; then
+  say "already in place: the unlock screen on $1 ($2x$3) only"
+  exit 0
+fi
 if ! _e=$(mkdir -p "$RUN" 2>&1 && cp "$THEME" "$_copy" 2>&1 \
     && sed -i "s/^keep_w = .*/keep_w = $2;/; s/^keep_h = .*/keep_h = $3;/" \
       "$_copy" 2>&1); then

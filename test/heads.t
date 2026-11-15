@@ -123,6 +123,23 @@ case $_o in *"could not put the copy in place (mount: not permitted)"*) ;;
   *) fail "a failed mount must say why: $_o" ;; esac
 pass "closed, no lid, no panel, odd mode, old theme, failed mount: mirrored"
 
+# --- a second run, after the copy is in place: it says so, nothing more ------
+# Live, 2026-11-14: systemd ran the step again at switch-root, cp refused the
+# SAME FILE (the theme was the bound copy by then), and it logged "mirrored",
+# which was false. The copy path IS the theme here, the state it found.
+fresh open; mkdir -p "$F/run"
+_o=$(env PATH="$T/bin:$PATH" F="$F" BOOTIQUE_LID="$F/lid" \
+  BOOTIQUE_DRM="$F/drm" BOOTIQUE_THEME="$F/theme/bootique.script" \
+  BOOTIQUE_CMDLINE="$F/cmdline" BOOTIQUE_RUN="$F/theme" sh "$S") \
+  || fail "exit $? on a second run"
+case $_o in *"already in place: the unlock screen on eDP-1"*) ;;
+  *) fail "a second run must say the copy is already in place: $_o" ;; esac
+[ -f "$F/mounted" ] && fail "a second run must not bind again"
+untouched
+grep -qx 'RemainAfterExit=yes' "$HERE/plymouth/heads/bootique-heads.service" \
+  || fail "the unit must stay active, or systemd runs it again at switch-root"
+pass "a second run sees its copy in place and says so; the unit stays active"
+
 # --- a panel that arrives while it waits -------------------------------------
 fresh open; mv "$F/drm/card0-eDP-1" "$F/eDP-late"
 cat > "$T/bin/sleep" <<'EOF'
