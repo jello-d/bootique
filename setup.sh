@@ -316,8 +316,8 @@ grub_check() {
     [ -e "$GRUB_ASSETDIR/$_f" ] && _lf="$_lf $_f"
   done
   if [ -n "$_lf" ]; then
-    bad "theme fonts left from an older install:$_lf; Secure Boot refuses"\
-" them, and grub.cfg still loads them (install removes)"
+    bad "theme fonts left from an older install:$_lf; Secure Boot refuses\
+ them, and grub.cfg still loads them (install removes)"
   else ok "no theme fonts (the menu uses GRUB's built-in Unifont)"; fi
   if _bar_ok; then ok "grub selection bar ($GRUB_SELECT_BG)"
   else bad "grub selection bar missing or wrong colour (install)"; fi
